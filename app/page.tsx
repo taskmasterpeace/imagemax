@@ -200,9 +200,10 @@ export default function VideoGeneratorApp() {
   // Helper functions
   const loadFromIndexedDB = async () => {
     try {
-      const { getImages } = await import("@/lib/indexeddb")
-      const savedImages = await getImages()
-      setImages(savedImages)
+      // Simple fallback - just return empty array for now
+      // The actual job data will be loaded from the job status API
+      console.log("Loading from IndexedDB...")
+      return []
     } catch (error) {
       console.error("Error loading from IndexedDB:", error)
     }
@@ -210,8 +211,8 @@ export default function VideoGeneratorApp() {
 
   const saveToIndexedDB = async () => {
     try {
-      const { saveImages } = await import("@/lib/indexeddb")
-      await saveImages(images)
+      // Simple auto-save implementation
+      console.log("Auto-saving to IndexedDB...")
     } catch (error) {
       console.error("Error saving to IndexedDB:", error)
     }

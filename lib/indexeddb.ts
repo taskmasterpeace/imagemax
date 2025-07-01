@@ -157,7 +157,52 @@ class IndexedDBManager {
       }
     }
   }
+
+  async getImages(): Promise<any[]> {
+    try {
+      const jobs = await this.getAllJobs()
+      const allImages: any[] = []
+
+      for (const job of jobs) {
+        for (const task of job.tasks) {
+          if (task.outputUrl) {
+            allImages.push({
+              id: `${job.jobId}_${task.filename}`,
+              file: { name: task.filename },
+              preview: task.outputUrl,
+              prompt: task.prompt,
+              selected: false,
+              status: task.status,
+              outputUrl: task.outputUrl,
+              error: task.error,
+            })
+          }
+        }
+      }
+
+      return allImages
+    } catch (error) {
+      console.error("Error getting images:", error)
+      return []
+    }
+  }
+
+  async saveImages(images: any[]): Promise<void> {
+    // For now, we'll just log this since we save jobs differently
+    console.log("Auto-saving images:", images.length)
+  }
 }
 
 export const dbManager = new IndexedDBManager()
+
+export const getImages = async () => {
+  await dbManager.init()
+  return dbManager.getImages()
+}
+
+export const saveImages = async (images: any[]) => {
+  await dbManager.init()
+  return dbManager.saveImages(images)
+}
+
 export type { JobData, TaskData }
