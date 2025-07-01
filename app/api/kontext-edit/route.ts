@@ -6,158 +6,178 @@ export async function POST(request: NextRequest) {
     const image = formData.get("image") as File
     const prompt = formData.get("prompt") as string
     const editId = formData.get("editId") as string
-    const model = formData.get("model") as "dev" | "max"
+    const model = formData.get("model") as string
 
-    if (!image || !prompt || !model) {
-      return NextResponse.json({ error: "Missing image, prompt, or model" }, { status: 400 })
+    if (!image || !prompt || !editId) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
     }
 
     const apiToken = process.env.REPLICATE_API_TOKEN
 
+    console.log("=== Starting Kontext Edit ===")
     if (!apiToken) {
-      return NextResponse.json({ error: "REPLICATE_API_TOKEN not configured" }, { status: 500 })
+      console.error("🔴 REPLICATE_API_TOKEN is NOT SET in the environment.")
+      return NextResponse.json(
+        {
+          success: false,
+          error: "REPLICATE_API_TOKEN environment variable not set on the server.",
+        },
+        { status: 500 },
+      )
     }
 
-    console.log("=== Starting Kontext Edit ===")
-    console.log("Image:", image.name, "Size:", image.size, "Type:", image.type)
-    console.log("Prompt:", prompt)
-    console.log("Model:", model)
-    console.log("Edit ID:", editId)
+    console.log("🟢 API Token is present.")
+    console.log(`Token Snippet: ${apiToken.substring(0, 11)}... (length: ${apiToken.length})`)
+
+    if (!apiToken.startsWith("r8_")) {
+      console.error("🔴 Token format is INVALID. It should start with 'r8_'.")
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid Replicate API token format.",
+        },
+        { status: 500 },
+      )
+    }
+
+    console.log("🟢 Token format is valid.")
 
     // Step 1: Upload image to Replicate
-    console.log("Step 1: Uploading image to Replicate...")
-    const imageBuffer = await image.arrayBuffer()
-    const imageBlob = new Blob([imageBuffer], { type: image.type })
-    const uploadFormData = new FormData()
-    uploadFormData.append("file", imageBlob, image.name)
+    console.log("📤 Step 1: Uploading image to Replicate...")
+    const imageUrl = await uploadImageToReplicate(image, apiToken)
+    console.log("✅ Image uploaded successfully:", imageUrl)
 
-    const uploadResponse = await fetch("https://api.replicate.com/v1/files", {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${apiToken}`,
-      },
-      body: uploadFormData,
-    })
-
-    if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text()
-      console.error("Upload error response:", errorText)
-      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`)
-    }
-
-    const uploadResult = await uploadResponse.json()
-    const imageUrl = uploadResult.serving_url
-    console.log("Image uploaded successfully. URL:", imageUrl)
-
-    // Step 2: Create Kontext prediction with the selected model
-    console.log("Step 2: Creating Kontext prediction...")
-
-    // Model version IDs (you'll need to get the actual version IDs from Replicate)
-    const modelVersions = {
-      dev: "flux-kontext-dev-version-id", // Replace with actual version ID
-      max: "flux-kontext-max-version-id", // Replace with actual version ID
-    }
-
-    const predictionData = {
-      version: modelVersions[model],
-      input: {
-        prompt: prompt,
-        input_image: imageUrl,
-        output_format: "jpg",
-        // Dev model specific parameters
-        ...(model === "dev" && {
-          go_fast: true,
-          guidance: 2.5,
-          aspect_ratio: "match_input_image",
-          output_quality: 80,
-          num_inference_steps: 30,
-        }),
-        // Max model uses default parameters for premium quality
-      },
-    }
-
-    console.log("Prediction data:", JSON.stringify(predictionData, null, 2))
-
-    const predictionResponse = await fetch("https://api.replicate.com/v1/predictions", {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${apiToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(predictionData),
-    })
-
-    if (!predictionResponse.ok) {
-      const errorText = await predictionResponse.text()
-      console.error("Prediction error response:", errorText)
-      throw new Error(`Prediction creation failed: ${predictionResponse.status} - ${errorText}`)
-    }
-
-    const prediction = await predictionResponse.json()
-    console.log("Prediction created:", prediction.id, "Status:", prediction.status)
+    // Step 2: Create Kontext prediction
+    console.log("🎨 Step 2: Creating Kontext edit prediction...")
+    const predictionId = await createKontextPrediction(imageUrl, prompt, model, apiToken)
+    console.log("✅ Prediction created:", predictionId)
 
     // Step 3: Poll for completion
-    console.log("Step 3: Polling for completion...")
-    const maxWaitTime = model === "dev" ? 3 * 60 * 1000 : 5 * 60 * 1000 // Dev: 3 min, Max: 5 min
-    const startTime = Date.now()
-    let finalPrediction = prediction
+    console.log("⏳ Step 3: Polling for completion...")
+    const outputUrl = await pollPrediction(predictionId, apiToken)
+    console.log("🎉 Kontext edit completed:", outputUrl)
 
-    while (
-      (finalPrediction.status === "starting" || finalPrediction.status === "processing") &&
-      Date.now() - startTime < maxWaitTime
-    ) {
-      const waitTime = model === "dev" ? 1500 : 2000 // Dev polls faster
-      await new Promise((resolve) => setTimeout(resolve, waitTime))
+    console.log("=== Kontext Edit Complete ===\n")
 
-      const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${finalPrediction.id}`, {
-        headers: {
-          Authorization: `Token ${apiToken}`,
-        },
-      })
-
-      if (!statusResponse.ok) {
-        throw new Error(`Status check failed: ${statusResponse.status}`)
-      }
-
-      finalPrediction = await statusResponse.json()
-      console.log("Poll result:", finalPrediction.status)
-    }
-
-    // Check final status
-    if (finalPrediction.status === "succeeded") {
-      if (!finalPrediction.output) {
-        throw new Error("Prediction succeeded but no output received")
-      }
-
-      const editedImageUrl = Array.isArray(finalPrediction.output) ? finalPrediction.output[0] : finalPrediction.output
-
-      console.log("=== Image Edit Complete ===")
-      console.log("Model used:", model.toUpperCase())
-      console.log("Edited Image URL:", editedImageUrl)
-
-      return NextResponse.json({
-        success: true,
-        imageUrl: editedImageUrl,
-        editId: editId,
-        model: model,
-      })
-    } else if (finalPrediction.status === "failed") {
-      const errorMsg = finalPrediction.error || "Image editing failed"
-      console.error("Prediction failed:", errorMsg)
-      throw new Error(errorMsg)
-    } else {
-      throw new Error(`Image editing timed out. Final status: ${finalPrediction.status}`)
-    }
+    return NextResponse.json({
+      success: true,
+      imageUrl: outputUrl,
+      editId,
+    })
   } catch (error) {
-    console.error("=== Kontext Edit Error ===")
-    console.error("Error details:", error)
-
+    console.error("❌ Error in kontext-edit:", error)
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Image editing failed",
+        error: error instanceof Error ? error.message : "Unknown error occurred",
       },
       { status: 500 },
     )
   }
+}
+
+async function uploadImageToReplicate(image: File, apiToken: string): Promise<string> {
+  const arrayBuffer = await image.arrayBuffer()
+
+  const response = await fetch("https://api.replicate.com/v1/files", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": image.type,
+    },
+    body: arrayBuffer,
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error("Upload error response:", errorText)
+    throw new Error(`Failed to upload image: ${response.status} ${response.statusText}`)
+  }
+
+  const result = await response.json()
+  return result.urls.get
+}
+
+async function createKontextPrediction(
+  imageUrl: string,
+  prompt: string,
+  model: string,
+  apiToken: string,
+): Promise<string> {
+  // Use the appropriate Kontext model version based on the model parameter
+  const modelVersion =
+    model === "max"
+      ? "kontext-max-version-id" // Replace with actual version ID
+      : "kontext-dev-version-id" // Replace with actual version ID
+
+  const input = {
+    image: imageUrl,
+    prompt: prompt,
+  }
+
+  const response = await fetch("https://api.replicate.com/v1/predictions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      version: modelVersion,
+      input,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error("Kontext prediction creation error:", errorText)
+    throw new Error(`Failed to create Kontext prediction: ${response.status} ${response.statusText}`)
+  }
+
+  const result = await response.json()
+  return result.id
+}
+
+async function pollPrediction(predictionId: string, apiToken: string): Promise<string> {
+  const maxAttempts = 30 // 5 minutes with 10-second intervals
+  let attempts = 0
+
+  while (attempts < maxAttempts) {
+    const response = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to get prediction status: ${response.status}`)
+    }
+
+    const result = await response.json()
+    console.log(`Polling attempt ${attempts + 1}: Status = ${result.status}`)
+
+    if (result.status === "succeeded") {
+      if (result.output) {
+        // Handle different output formats
+        if (Array.isArray(result.output)) {
+          return result.output[0]
+        } else if (typeof result.output === "string") {
+          return result.output
+        } else {
+          throw new Error("Unexpected output format")
+        }
+      } else {
+        throw new Error("Prediction succeeded but no output found")
+      }
+    } else if (result.status === "failed") {
+      throw new Error(`Prediction failed: ${result.error || "Unknown error"}`)
+    } else if (result.status === "canceled") {
+      throw new Error("Prediction was canceled")
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, 10000)) // 10 seconds
+    attempts++
+  }
+
+  throw new Error("Prediction timed out")
 }

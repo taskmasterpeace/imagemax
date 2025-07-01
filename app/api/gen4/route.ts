@@ -4,165 +4,228 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
     const prompt = formData.get("prompt") as string
-    const seed = formData.get("seed") as string | null
-    const aspectRatio = formData.get("aspect_ratio") as string
+    const aspectRatio = formData.get("aspectRatio") as string
     const resolution = formData.get("resolution") as string
-    const referenceImages = formData.getAll("reference_images") as File[]
-    const referenceTags = formData.getAll("reference_tags") as string[]
+    const seedStr = formData.get("seed") as string
+    const seed = seedStr ? Number.parseInt(seedStr) : undefined
 
-    if (!prompt?.trim()) {
-      return NextResponse.json({ error: "Prompt is required" }, { status: 400 })
+    // Get reference images and their tags
+    const referenceImages: File[] = []
+    const referenceTags: string[][] = []
+
+    for (let i = 1; i <= 3; i++) {
+      const image = formData.get(`referenceImage${i}`) as File
+      const tagsStr = formData.get(`referenceTags${i}`) as string
+
+      if (image) {
+        referenceImages.push(image)
+        referenceTags.push(tagsStr ? JSON.parse(tagsStr) : [])
+      }
     }
 
-    if (referenceImages.length === 0 || referenceImages.length > 3) {
-      return NextResponse.json({ error: "1-3 reference images required" }, { status: 400 })
+    if (!prompt || referenceImages.length === 0) {
+      return NextResponse.json({ error: "Missing prompt or reference images" }, { status: 400 })
     }
 
     const apiToken = process.env.REPLICATE_API_TOKEN
 
+    console.log("=== Starting Gen 4 Generation ===")
     if (!apiToken) {
-      return NextResponse.json({ error: "REPLICATE_API_TOKEN not configured" }, { status: 500 })
+      console.error("🔴 REPLICATE_API_TOKEN is NOT SET in the environment.")
+      return NextResponse.json(
+        {
+          error: "REPLICATE_API_TOKEN environment variable not set on the server.",
+        },
+        { status: 500 },
+      )
     }
 
-    console.log("=== Starting Gen 4 Generation ===")
-    console.log("Prompt:", prompt)
-    console.log("Reference Images:", referenceImages.length)
-    console.log("Aspect Ratio:", aspectRatio)
-    console.log("Resolution:", resolution)
-    console.log("Reference Tags:", referenceTags)
+    console.log("🟢 API Token is present.")
+    console.log(`Token Snippet: ${apiToken.substring(0, 11)}... (length: ${apiToken.length})`)
+
+    if (!apiToken.startsWith("r8_")) {
+      console.error("🔴 Token format is INVALID. It should start with 'r8_'.")
+      return NextResponse.json(
+        {
+          error: "Invalid Replicate API token format.",
+        },
+        { status: 500 },
+      )
+    }
+
+    console.log("🟢 Token format is valid.")
 
     // Step 1: Upload reference images to Replicate
-    const uploadedImageUrls: string[] = []
+    console.log("📤 Step 1: Uploading reference images to Replicate...")
+    const referenceUrls: string[] = []
 
     for (let i = 0; i < referenceImages.length; i++) {
-      const image = referenceImages[i]
-      console.log(`Uploading reference image ${i + 1}: ${image.name}`)
-
-      const imageBuffer = await image.arrayBuffer()
-      const imageBlob = new Blob([imageBuffer], { type: image.type })
-      const uploadFormData = new FormData()
-      uploadFormData.append("file", imageBlob, image.name)
-
-      const uploadResponse = await fetch("https://api.replicate.com/v1/files", {
-        method: "POST",
-        headers: {
-          Authorization: `Token ${apiToken}`,
-        },
-        body: uploadFormData,
-      })
-
-      if (!uploadResponse.ok) {
-        const errorText = await uploadResponse.text()
-        console.error(`Upload error for image ${i + 1}:`, errorText)
-        throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`)
-      }
-
-      const uploadResult = await uploadResponse.json()
-      uploadedImageUrls.push(uploadResult.serving_url)
-      console.log(`Image ${i + 1} uploaded successfully`)
+      const imageUrl = await uploadImageToReplicate(referenceImages[i], apiToken)
+      referenceUrls.push(imageUrl)
+      console.log(`✅ Reference image ${i + 1} uploaded:`, imageUrl)
     }
 
     // Step 2: Create Gen 4 prediction
-    console.log("Creating Gen 4 prediction...")
-
-    // Note: You'll need to replace this with the actual Gen 4 model version ID
-    const gen4ModelVersion = "gen4-model-version-id" // Replace with actual version ID
-
-    const predictionData = {
-      version: gen4ModelVersion,
-      input: {
-        prompt: prompt,
-        reference_images: uploadedImageUrls,
-        aspect_ratio: aspectRatio,
-        resolution: resolution,
-        ...(seed && { seed: Number.parseInt(seed) }),
-        ...(referenceTags.length > 0 && { reference_tags: referenceTags }),
-      },
-    }
-
-    console.log("Prediction data:", JSON.stringify(predictionData, null, 2))
-
-    const predictionResponse = await fetch("https://api.replicate.com/v1/predictions", {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${apiToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(predictionData),
-    })
-
-    if (!predictionResponse.ok) {
-      const errorText = await predictionResponse.text()
-      console.error("Prediction error response:", errorText)
-      throw new Error(`Prediction creation failed: ${predictionResponse.status} - ${errorText}`)
-    }
-
-    const prediction = await predictionResponse.json()
-    console.log("Prediction created:", prediction.id, "Status:", prediction.status)
+    console.log("✨ Step 2: Creating Gen 4 prediction...")
+    const predictionId = await createGen4Prediction(
+      prompt,
+      referenceUrls,
+      referenceTags,
+      { aspectRatio, resolution, seed },
+      apiToken,
+    )
+    console.log("✅ Prediction created:", predictionId)
 
     // Step 3: Poll for completion
-    console.log("Polling for completion...")
-    const maxWaitTime = 5 * 60 * 1000 // 5 minutes
-    const startTime = Date.now()
-    let finalPrediction = prediction
+    console.log("⏳ Step 3: Polling for completion...")
+    const outputUrl = await pollPrediction(predictionId, apiToken)
+    console.log("🎉 Gen 4 generation completed:", outputUrl)
 
-    while (
-      (finalPrediction.status === "starting" || finalPrediction.status === "processing") &&
-      Date.now() - startTime < maxWaitTime
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 2000)) // Poll every 2 seconds
+    console.log("=== Gen 4 Generation Complete ===\n")
 
-      const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${finalPrediction.id}`, {
-        headers: {
-          Authorization: `Token ${apiToken}`,
-        },
-      })
-
-      if (!statusResponse.ok) {
-        throw new Error(`Status check failed: ${statusResponse.status}`)
-      }
-
-      finalPrediction = await statusResponse.json()
-      console.log("Poll result:", finalPrediction.status)
-    }
-
-    // Check final status
-    if (finalPrediction.status === "succeeded") {
-      if (!finalPrediction.output) {
-        throw new Error("Prediction succeeded but no output received")
-      }
-
-      const generatedImageUrl = Array.isArray(finalPrediction.output)
-        ? finalPrediction.output[0]
-        : finalPrediction.output
-
-      console.log("=== Gen 4 Generation Complete ===")
-      console.log("Generated Image URL:", generatedImageUrl)
-
-      return NextResponse.json({
-        success: true,
-        imageUrl: generatedImageUrl,
-        aspectRatio: aspectRatio,
-        resolution: resolution,
-        referenceCount: referenceImages.length,
-      })
-    } else if (finalPrediction.status === "failed") {
-      const errorMsg = finalPrediction.error || "Gen 4 generation failed"
-      console.error("Prediction failed:", errorMsg)
-      throw new Error(errorMsg)
-    } else {
-      throw new Error(`Gen 4 generation timed out. Final status: ${finalPrediction.status}`)
-    }
+    return NextResponse.json({
+      success: true,
+      imageUrl: outputUrl,
+      predictionId,
+    })
   } catch (error) {
-    console.error("=== Gen 4 Generation Error ===")
-    console.error("Error details:", error)
-
+    console.error("❌ Error in gen4:", error)
     return NextResponse.json(
       {
-        success: false,
-        error: error instanceof Error ? error.message : "Gen 4 generation failed",
+        error: error instanceof Error ? error.message : "Unknown error occurred",
       },
       { status: 500 },
     )
   }
+}
+
+async function uploadImageToReplicate(image: File, apiToken: string): Promise<string> {
+  const arrayBuffer = await image.arrayBuffer()
+
+  const response = await fetch("https://api.replicate.com/v1/files", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": image.type,
+    },
+    body: arrayBuffer,
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error("Upload error response:", errorText)
+    throw new Error(`Failed to upload image: ${response.status} ${response.statusText}`)
+  }
+
+  const result = await response.json()
+  return result.urls.get
+}
+
+async function createGen4Prediction(
+  prompt: string,
+  referenceUrls: string[],
+  referenceTags: string[][],
+  settings: { aspectRatio: string; resolution: string; seed?: number },
+  apiToken: string,
+): Promise<string> {
+  // Build the input object for Gen 4
+  const input: any = {
+    prompt: prompt,
+    aspect_ratio: settings.aspectRatio,
+    output_format: "png",
+    output_quality: 90,
+  }
+
+  // Add reference images
+  if (referenceUrls.length > 0) {
+    input.reference_image_1 = referenceUrls[0]
+    if (referenceTags[0] && referenceTags[0].length > 0) {
+      input.reference_tags_1 = referenceTags[0].join(", ")
+    }
+  }
+
+  if (referenceUrls.length > 1) {
+    input.reference_image_2 = referenceUrls[1]
+    if (referenceTags[1] && referenceTags[1].length > 0) {
+      input.reference_tags_2 = referenceTags[1].join(", ")
+    }
+  }
+
+  if (referenceUrls.length > 2) {
+    input.reference_image_3 = referenceUrls[2]
+    if (referenceTags[2] && referenceTags[2].length > 0) {
+      input.reference_tags_3 = referenceTags[2].join(", ")
+    }
+  }
+
+  // Add seed if provided
+  if (settings.seed !== undefined) {
+    input.seed = settings.seed
+  }
+
+  const response = await fetch("https://api.replicate.com/v1/predictions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      version: "gen4-model-version-id", // Replace with actual Gen 4 model version ID
+      input,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error("Gen 4 prediction creation error:", errorText)
+    throw new Error(`Failed to create Gen 4 prediction: ${response.status} ${response.statusText}`)
+  }
+
+  const result = await response.json()
+  return result.id
+}
+
+async function pollPrediction(predictionId: string, apiToken: string): Promise<string> {
+  const maxAttempts = 60 // 10 minutes with 10-second intervals
+  let attempts = 0
+
+  while (attempts < maxAttempts) {
+    const response = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to get prediction status: ${response.status}`)
+    }
+
+    const result = await response.json()
+    console.log(`Polling attempt ${attempts + 1}: Status = ${result.status}`)
+
+    if (result.status === "succeeded") {
+      if (result.output) {
+        // Handle different output formats
+        if (Array.isArray(result.output)) {
+          return result.output[0]
+        } else if (typeof result.output === "string") {
+          return result.output
+        } else {
+          throw new Error("Unexpected output format")
+        }
+      } else {
+        throw new Error("Prediction succeeded but no output found")
+      }
+    } else if (result.status === "failed") {
+      throw new Error(`Prediction failed: ${result.error || "Unknown error"}`)
+    } else if (result.status === "canceled") {
+      throw new Error("Prediction was canceled")
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, 10000)) // 10 seconds
+    attempts++
+  }
+
+  throw new Error("Prediction timed out")
 }

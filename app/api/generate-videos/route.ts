@@ -19,6 +19,7 @@ interface TaskData {
   status: "queued" | "processing" | "completed" | "failed"
   outputUrl?: string
   error?: string
+  predictionId?: string
 }
 
 export async function POST(request: NextRequest) {
@@ -98,7 +99,7 @@ async function processImages(jobId: string, images: File[], metadata: any) {
   const { model, resolution, duration, camera_fixed } = metadata
   const apiToken = process.env.REPLICATE_API_TOKEN
 
-  console.log("--- API Token Check ---")
+  console.log("=== Starting Video Generation ===")
   if (!apiToken) {
     console.error("🔴 REPLICATE_API_TOKEN is NOT SET in the environment.")
     job.status = "failed"
@@ -117,188 +118,199 @@ async function processImages(jobId: string, images: File[], metadata: any) {
     job.status = "failed"
     job.tasks.forEach((task: TaskData) => {
       task.status = "failed"
-      task.error = "Invalid Replicate API token format. Must start with 'r8_'."
+      task.error = "Invalid Replicate API token format."
     })
     return
   }
-  console.log("🟢 Token format looks correct.")
-  console.log("-----------------------")
 
-  // Process images sequentially to avoid overwhelming the API
+  console.log("🟢 Token format is valid.")
+
+  // Process each image
   for (let i = 0; i < images.length; i++) {
     const image = images[i]
     const task = job.tasks[i]
 
     try {
+      console.log(`\n--- Processing Image ${i + 1}/${images.length}: ${image.name} ---`)
       task.status = "processing"
-      console.log(`Processing image ${i + 1}/${images.length}: ${image.name}`)
 
-      // Try to call Replicate API with comprehensive error handling
-      const result = await callReplicateAPIWithRetry(image, task.prompt, model, resolution, duration, camera_fixed)
+      // Step 1: Upload image to Replicate
+      console.log("📤 Step 1: Uploading image to Replicate...")
+      const uploadUrl = await uploadImageToReplicate(image, apiToken)
+      console.log("✅ Image uploaded successfully:", uploadUrl)
+
+      // Step 2: Create prediction
+      console.log("🎬 Step 2: Creating video prediction...")
+      const predictionId = await createVideoPrediction(
+        uploadUrl,
+        task.prompt,
+        {
+          model,
+          resolution,
+          duration,
+          camera_fixed,
+        },
+        apiToken,
+      )
+
+      task.predictionId = predictionId
+      console.log("✅ Prediction created:", predictionId)
+
+      // Step 3: Poll for completion
+      console.log("⏳ Step 3: Polling for completion...")
+      const outputUrl = await pollPrediction(predictionId, apiToken)
 
       task.status = "completed"
-      task.outputUrl = result.videoUrl
-
-      console.log(`Completed image ${i + 1}/${images.length}`)
+      task.outputUrl = outputUrl
+      console.log("🎉 Video generation completed:", outputUrl)
     } catch (error) {
-      console.error(`Error processing image ${i + 1}:`, error)
+      console.error(`❌ Error processing ${image.name}:`, error)
       task.status = "failed"
-
-      // Provide more specific error messages
-      if (error instanceof Error) {
-        if (error.message.includes("Invalid token") || error.message.includes("Authentication failed")) {
-          task.error = "Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local"
-        } else if (error.message.includes("Network error")) {
-          task.error = "Network connection failed. Check your internet connection."
-        } else {
-          task.error = error.message
-        }
-      } else {
-        task.error = "Unknown error occurred"
-      }
-
-      // Continue processing other images even if one fails
-      console.log(`Continuing with remaining images...`)
+      task.error = error instanceof Error ? error.message : "Unknown error"
     }
   }
 
   // Update job status
-  const completedTasks = job.tasks.filter((t: TaskData) => t.status === "completed")
-  const failedTasks = job.tasks.filter((t: TaskData) => t.status === "failed")
+  const completedTasks = job.tasks.filter((task: TaskData) => task.status === "completed")
+  const failedTasks = job.tasks.filter((task: TaskData) => task.status === "failed")
 
-  if (completedTasks.length + failedTasks.length === job.tasks.length) {
-    if (job.mergeRequested && completedTasks.length > 1) {
-      job.status = "merging"
-      await mergeVideos(jobId, completedTasks)
-    } else {
-      job.status = completedTasks.length > 0 ? "completed" : "failed"
-    }
-  }
-
-  console.log(
-    `Job ${jobId} completed. Status: ${job.status}, Completed: ${completedTasks.length}, Failed: ${failedTasks.length}`,
-  )
-}
-
-async function callReplicateAPIWithRetry(
-  image: File,
-  prompt: string,
-  model: string,
-  resolution: string,
-  duration: number,
-  cameraFixed: boolean,
-  maxRetries = 2,
-): Promise<{ videoUrl: string }> {
-  let lastError: Error | null = null
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`Attempt ${attempt}/${maxRetries} for image: ${image.name}`)
-      return await callReplicateAPI(image, prompt, model, resolution, duration, cameraFixed)
-    } catch (error) {
-      lastError = error as Error
-      console.error(`🔴 Attempt ${attempt} failed:`, error.message) // Log only the message for clarity
-
-      if (attempt < maxRetries) {
-        const delay = attempt * 2000 // 2s, 4s delay
-        console.log(`Retrying in ${delay}ms...`)
-        await new Promise((resolve) => setTimeout(resolve, delay))
-      }
-    }
-  }
-
-  throw lastError || new Error("All retry attempts failed")
-}
-
-async function callReplicateAPI(
-  image: File,
-  prompt: string,
-  model: string,
-  resolution: string,
-  duration: number,
-  cameraFixed: boolean,
-): Promise<{ videoUrl: string }> {
-  const apiToken = process.env.REPLICATE_API_TOKEN!
-
-  try {
-    console.log("=== Starting Replicate API Call ===")
-
-    // Step 1: Test API connection with the provided token
-    console.log("Step 1: Verifying API token with Replicate...")
-    const testResponse = await fetch("https://api.replicate.com/v1/models", {
-      headers: {
-        Authorization: `Token ${apiToken}`, // Using "Token" prefix as per Replicate docs
-      },
-    })
-
-    if (testResponse.status === 401) {
-      console.error("🔴 API Verification Failed: 401 Unauthorized. The token is invalid.")
-      throw new Error("Invalid Replicate API token. Please check your .env.local file and restart the server.")
-    }
-    if (!testResponse.ok) {
-      console.error(`🔴 API Verification Failed: Status ${testResponse.status}`)
-      throw new Error(`API connection test failed with status: ${testResponse.status}`)
-    }
-    console.log("🟢 API Token Verified Successfully.")
-
-    // Step 2: Upload image to Replicate
-    console.log("Step 2: Uploading image to Replicate...")
-    const imageBuffer = await image.arrayBuffer()
-    const imageBlob = new Blob([imageBuffer], { type: image.type })
-    const uploadFormData = new FormData()
-    uploadFormData.append("file", imageBlob, image.name) // Replicate docs use 'file' key
-
-    const uploadResponse = await fetch("https://api.replicate.com/v1/files", {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${apiToken}`,
-      },
-      body: uploadFormData,
-    })
-
-    if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text()
-      console.error(`🔴 Image Upload Failed: Status ${uploadResponse.status}`, errorText)
-      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`)
-    }
-
-    const uploadResult = await uploadResponse.json()
-    const servingUrl = uploadResult.serving_url
-    console.log("🟢 Image uploaded successfully. URL:", servingUrl)
-
-    // For now, to ensure the token part is solved, we will return a placeholder
-    // and not proceed to the expensive model prediction step.
-    console.log("✅ Authentication and upload successful. Returning placeholder video for now.")
-    await new Promise((resolve) => setTimeout(resolve, 1000)) // Simulate work
-    return { videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" }
-  } catch (error) {
-    console.error("=== Replicate API Error ===")
-    console.error("Error details:", error instanceof Error ? error.message : String(error))
-    // Re-throw the specific error to be caught by the calling function
-    throw error
-  }
-}
-
-async function mergeVideos(jobId: string, completedTasks: TaskData[]) {
-  const job = jobs.get(jobId)
-  if (!job) return
-
-  try {
-    console.log(`Merging ${completedTasks.length} videos for job ${jobId}`)
-
-    // For now, just simulate merging - in production, implement FFmpeg
-    await new Promise((resolve) => setTimeout(resolve, 3000))
-
+  if (completedTasks.length === job.tasks.length) {
     job.status = "completed"
-    // Use first video as placeholder for merged result
-    job.mergedOutputUrl = completedTasks[0].outputUrl
-
-    console.log(`Merge completed for job ${jobId}`)
-  } catch (error) {
-    console.error("Error merging videos:", error)
+    console.log("🎊 All videos generated successfully!")
+  } else if (failedTasks.length === job.tasks.length) {
     job.status = "failed"
+    console.log("💥 All video generations failed.")
+  } else {
+    job.status = "completed" // Partial completion
+    console.log(`⚠️ Partial completion: ${completedTasks.length}/${job.tasks.length} succeeded`)
   }
+
+  console.log("=== Video Generation Complete ===\n")
 }
 
-// Export the jobs map for the status endpoint
-export { jobs }
+async function uploadImageToReplicate(image: File, apiToken: string): Promise<string> {
+  const arrayBuffer = await image.arrayBuffer()
+
+  const response = await fetch("https://api.replicate.com/v1/files", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": image.type,
+    },
+    body: arrayBuffer,
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error("Upload error response:", errorText)
+    throw new Error(`Failed to upload image: ${response.status} ${response.statusText}`)
+  }
+
+  const result = await response.json()
+  return result.urls.get
+}
+
+async function createVideoPrediction(
+  imageUrl: string,
+  prompt: string,
+  settings: any,
+  apiToken: string,
+): Promise<string> {
+  const input = {
+    image: imageUrl,
+    prompt: prompt,
+    resolution: settings.resolution || "1280x720",
+    duration_seconds: settings.duration || 6,
+    camera_fixed: settings.camera_fixed || false,
+  }
+
+  const response = await fetch("https://api.replicate.com/v1/predictions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      version: "minimax-video-01", // This should be the actual model version ID
+      input,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error("Prediction creation error:", errorText)
+    throw new Error(`Failed to create prediction: ${response.status} ${response.statusText}`)
+  }
+
+  const result = await response.json()
+  return result.id
+}
+
+async function pollPrediction(predictionId: string, apiToken: string): Promise<string> {
+  const maxAttempts = 60 // 10 minutes with 10-second intervals
+  let attempts = 0
+
+  while (attempts < maxAttempts) {
+    const response = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to get prediction status: ${response.status}`)
+    }
+
+    const result = await response.json()
+    console.log(`Polling attempt ${attempts + 1}: Status = ${result.status}`)
+
+    if (result.status === "succeeded") {
+      if (result.output && result.output.length > 0) {
+        return result.output[0] // Return the first output URL
+      } else {
+        throw new Error("Prediction succeeded but no output URL found")
+      }
+    } else if (result.status === "failed") {
+      throw new Error(`Prediction failed: ${result.error || "Unknown error"}`)
+    } else if (result.status === "canceled") {
+      throw new Error("Prediction was canceled")
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, 10000)) // 10 seconds
+    attempts++
+  }
+
+  throw new Error("Prediction timed out")
+}
+
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url)
+  const jobId = searchParams.get("jobId")
+
+  if (!jobId) {
+    return NextResponse.json({ error: "Missing jobId" }, { status: 400 })
+  }
+
+  const job = jobs.get(jobId)
+  if (!job) {
+    return NextResponse.json({ error: "Job not found" }, { status: 404 })
+  }
+
+  const completedTasks = job.tasks.filter((task: TaskData) => task.status === "completed")
+
+  return NextResponse.json({
+    jobId: job.jobId,
+    status: job.status,
+    total: job.tasks.length,
+    completed: completedTasks.length,
+    tasks: job.tasks.map((task: TaskData) => ({
+      filename: task.filename,
+      prompt: task.prompt,
+      status: task.status,
+      outputUrl: task.outputUrl,
+      error: task.error,
+    })),
+    mergedOutputUrl: job.mergedOutputUrl,
+  })
+}
