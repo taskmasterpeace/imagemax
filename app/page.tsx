@@ -105,6 +105,17 @@ export default function SeedanceGenerator() {
   const [selectedImages, setSelectedImages] = useState<Set<string>>(new Set())
   const [showBulkActions, setShowBulkActions] = useState(false)
 
+  // Add Gen 4 state
+  const [showGen4, setShowGen4] = useState(false)
+  const [gen4Images, setGen4Images] = useState<ImageFile[]>([])
+  const [gen4Prompt, setGen4Prompt] = useState("")
+  const [gen4Seed, setGen4Seed] = useState<number | null>(null)
+  const [gen4AspectRatio, setGen4AspectRatio] = useState<"16:9" | "9:16" | "1:1" | "21:9">("16:9")
+  const [gen4Resolution, setGen4Resolution] = useState<"720p" | "1080p">("720p")
+  const [gen4ReferenceTags, setGen4ReferenceTags] = useState<string[]>(["", "", ""])
+  const [gen4Processing, setGen4Processing] = useState(false)
+  const [gen4Result, setGen4Result] = useState<string | null>(null)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -922,6 +933,109 @@ export default function SeedanceGenerator() {
     return () => clearTimeout(timeoutId)
   }, [images, model, kontextModel, cameraFixed, mergeVideos, isKontextMode])
 
+  const sendToGen4 = (imageIds: string[]) => {
+    if (imageIds.length === 0 || imageIds.length > 3) {
+      toast({
+        title: "Invalid Selection",
+        description: "Please select 1-3 images to send to Gen 4",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const selectedImages = images.filter((img) => imageIds.includes(img.id))
+    setGen4Images(selectedImages)
+    setShowGen4(true)
+
+    // Auto-generate default tags
+    const defaultTags = selectedImages.map((_, index) => `ref${index + 1}`)
+    setGen4ReferenceTags([...defaultTags, "", ""].slice(0, 3))
+
+    toast({
+      title: "Images Sent to Gen 4",
+      description: `${selectedImages.length} images ready for Gen 4 generation`,
+    })
+  }
+
+  const generateGen4 = async () => {
+    if (!gen4Prompt.trim()) {
+      toast({
+        title: "Missing Prompt",
+        description: "Please enter a prompt for Gen 4 generation",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (gen4Images.length === 0) {
+      toast({
+        title: "No Reference Images",
+        description: "Please add reference images first",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setGen4Processing(true)
+
+    try {
+      const formData = new FormData()
+
+      // Add images
+      gen4Images.forEach((img, index) => {
+        formData.append("reference_images", img.file)
+      })
+
+      // Add parameters
+      formData.append("prompt", gen4Prompt)
+      if (gen4Seed) formData.append("seed", gen4Seed.toString())
+      formData.append("aspect_ratio", gen4AspectRatio)
+      formData.append("resolution", gen4Resolution)
+
+      // Add tags (filter out empty ones)
+      const validTags = gen4ReferenceTags.filter((tag) => tag.trim().length >= 3)
+      validTags.forEach((tag) => {
+        formData.append("reference_tags", tag.trim())
+      })
+
+      const response = await fetch("/api/gen4", {
+        method: "POST",
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const result = await response.json()
+      setGen4Result(result.imageUrl)
+
+      toast({
+        title: "Gen 4 Complete!",
+        description: "Your new image has been generated",
+      })
+    } catch (error) {
+      console.error("Gen 4 error:", error)
+      toast({
+        title: "Gen 4 Failed",
+        description: error instanceof Error ? error.message : "Failed to generate image",
+        variant: "destructive",
+      })
+    } finally {
+      setGen4Processing(false)
+    }
+  }
+
+  const clearGen4 = () => {
+    setGen4Images([])
+    setGen4Prompt("")
+    setGen4Seed(null)
+    setGen4AspectRatio("16:9")
+    setGen4Resolution("720p")
+    setGen4ReferenceTags(["", "", ""])
+    setGen4Result(null)
+  }
+
   return (
     <div className="container mx-auto p-6 max-w-6xl">
       <div className="mb-8">
@@ -950,6 +1064,14 @@ export default function SeedanceGenerator() {
               <CheckCircle className="h-3 w-3" />
               Auto-saved
             </div>
+            <Button
+              variant={showGen4 ? "default" : "outline"}
+              onClick={() => setShowGen4(!showGen4)}
+              className={showGen4 ? "bg-orange-600 hover:bg-orange-700" : ""}
+            >
+              <ImageIcon className="mr-2 h-4 w-4" />
+              Gen 4 {gen4Images.length > 0 && `(${gen4Images.length})`}
+            </Button>
           </div>
         </div>
 
@@ -1298,6 +1420,219 @@ export default function SeedanceGenerator() {
         )}
       </Card>
 
+      {/* Gen 4 Panel */}
+      {showGen4 && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="h-5 w-5 text-orange-600" />
+                Gen 4 Image Generation
+                <Badge variant="secondary" className="text-xs">
+                  {gen4Images.length}/3 images
+                </Badge>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={clearGen4}>
+                  Clear All
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setShowGen4(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Reference Images */}
+            <div>
+              <Label className="text-base font-medium mb-3 block">Reference Images ({gen4Images.length}/3)</Label>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {[0, 1, 2].map((index) => {
+                  const image = gen4Images[index]
+                  return (
+                    <div key={index} className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center">
+                      {image ? (
+                        <div className="space-y-2">
+                          <img
+                            src={image.preview || "/placeholder.svg"}
+                            alt={`Reference ${index + 1}`}
+                            className="w-full h-32 object-cover rounded cursor-pointer"
+                            onClick={() => openFullscreenImage(image.preview, `Reference ${index + 1}`)}
+                          />
+                          <div className="text-xs text-gray-600">{image.file.name}</div>
+                          <Input
+                            placeholder={`Tag for image ${index + 1} (3-15 chars)`}
+                            value={gen4ReferenceTags[index] || ""}
+                            onChange={(e) => {
+                              const newTags = [...gen4ReferenceTags]
+                              newTags[index] = e.target.value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()
+                              setGen4ReferenceTags(newTags)
+                            }}
+                            maxLength={15}
+                            className="text-xs"
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              const newImages = [...gen4Images]
+                              newImages.splice(index, 1)
+                              setGen4Images(newImages)
+                            }}
+                            className="w-full"
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="text-gray-400">
+                          <ImageIcon className="mx-auto h-8 w-8 mb-2" />
+                          <p className="text-sm">Reference Image {index + 1}</p>
+                          <p className="text-xs">Select images and use "Send to Gen 4"</p>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Prompt */}
+            <div>
+              <Label htmlFor="gen4-prompt" className="text-base font-medium">
+                Prompt *
+              </Label>
+              <Textarea
+                id="gen4-prompt"
+                placeholder="Text prompt for image generation. Use @tag_name to reference your tagged images..."
+                value={gen4Prompt}
+                onChange={(e) => setGen4Prompt(e.target.value)}
+                className="min-h-[100px] mt-2"
+                disabled={gen4Processing}
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                Tip: Reference your images using @{gen4ReferenceTags.filter((tag) => tag.trim()).join(", @")}
+              </div>
+            </div>
+
+            {/* Settings Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Aspect Ratio */}
+              <div>
+                <Label htmlFor="gen4-aspect">Aspect Ratio</Label>
+                <Select
+                  value={gen4AspectRatio}
+                  onValueChange={(value: "16:9" | "9:16" | "1:1" | "21:9") => setGen4AspectRatio(value)}
+                  disabled={gen4Processing}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="16:9">16:9 (Landscape)</SelectItem>
+                    <SelectItem value="9:16">9:16 (Portrait)</SelectItem>
+                    <SelectItem value="1:1">1:1 (Square)</SelectItem>
+                    <SelectItem value="21:9">21:9 (Ultra-wide)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Resolution */}
+              <div>
+                <Label htmlFor="gen4-resolution">Resolution</Label>
+                <Select
+                  value={gen4Resolution}
+                  onValueChange={(value: "720p" | "1080p") => setGen4Resolution(value)}
+                  disabled={gen4Processing}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="720p">720p (Default)</SelectItem>
+                    <SelectItem value="1080p">1080p (Higher Quality)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Seed */}
+              <div>
+                <Label htmlFor="gen4-seed">Seed (Optional)</Label>
+                <Input
+                  id="gen4-seed"
+                  type="number"
+                  placeholder="Random seed for reproducible results"
+                  value={gen4Seed || ""}
+                  onChange={(e) => setGen4Seed(e.target.value ? Number.parseInt(e.target.value) : null)}
+                  disabled={gen4Processing}
+                />
+              </div>
+            </div>
+
+            {/* Generate Button */}
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">
+                Cost: ~$0.10 per generation • {gen4AspectRatio} • {gen4Resolution}
+              </div>
+              <Button
+                onClick={generateGen4}
+                disabled={gen4Processing || !gen4Prompt.trim() || gen4Images.length === 0}
+                size="lg"
+              >
+                {gen4Processing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <ImageIcon className="mr-2 h-4 w-4" />
+                    Generate with Gen 4
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {/* Result */}
+            {gen4Result && (
+              <div className="space-y-3 p-4 bg-green-50 rounded-lg border border-green-200">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-green-600" />
+                  <span className="text-sm font-medium text-green-800">Gen 4 Image Generated!</span>
+                </div>
+
+                <div className="relative group max-w-md mx-auto">
+                  <img
+                    src={gen4Result || "/placeholder.svg"}
+                    alt="Gen 4 Result"
+                    className="w-full rounded-lg shadow-sm cursor-pointer"
+                    onClick={() => openFullscreenImage(gen4Result, "Gen 4 Result")}
+                  />
+                  <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-200 rounded-lg flex items-center justify-center cursor-pointer">
+                    <Search className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
+                  </div>
+                </div>
+
+                <div className="flex gap-2 justify-center">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleImageDownload(gen4Result, "gen4_result.jpg")}
+                  >
+                    <Download className="h-3 w-3 mr-1" />
+                    Download
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => window.open(gen4Result, "_blank")}>
+                    <ExternalLink className="h-3 w-3 mr-1" />
+                    Open
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Image Upload */}
       <Card className="mb-6">
         <CardHeader>
@@ -1334,6 +1669,15 @@ export default function SeedanceGenerator() {
         <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
           <span className="text-sm text-blue-800">{selectedImages.size} images selected</span>
           <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => sendToGen4(Array.from(selectedImages))}
+              disabled={selectedImages.size === 0 || selectedImages.size > 3}
+            >
+              <ImageIcon className="h-3 w-3 mr-1" />
+              Send to Gen 4 ({selectedImages.size}/3)
+            </Button>
             <Button
               size="sm"
               variant="outline"
