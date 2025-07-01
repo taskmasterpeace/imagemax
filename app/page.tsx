@@ -8,13 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
+import { Input } from "@/components/ui/input"
 import {
   Upload,
-  Play,
   Download,
   Clock,
   CheckCircle,
@@ -24,15 +23,19 @@ import {
   ExternalLink,
   TestTube,
   PlayCircle,
-  Search,
   Edit,
   Trash2,
   ImageIcon,
   Video,
   DollarSign,
+  Plus,
+  X,
+  Search,
+  Play,
 } from "lucide-react"
 import { toast } from "@/hooks/use-toast"
 import { dbManager, type JobData } from "@/lib/indexeddb"
+import { Progress } from "@/components/ui/progress"
 
 interface ImageFile {
   id: string
@@ -73,6 +76,12 @@ interface JobStatus {
   startedAt: number
 }
 
+interface Template {
+  id: string
+  name: string
+  prompt: string
+}
+
 export default function SeedanceGenerator() {
   const [images, setImages] = useState<ImageFile[]>([])
   const [model, setModel] = useState<"lite" | "pro">("lite")
@@ -108,29 +117,68 @@ export default function SeedanceGenerator() {
 
   // Add template state and data:
   const [showTemplates, setShowTemplates] = useState(false)
+  const [editingTemplate, setEditingTemplate] = useState<string | null>(null)
+  const [newTemplateName, setNewTemplateName] = useState("")
+  const [newTemplatePrompt, setNewTemplatePrompt] = useState("")
+  const [editTemplateName, setEditTemplateName] = useState("")
+  const [editTemplatePrompt, setEditTemplatePrompt] = useState("")
 
-  const templates = {
+  const [templates, setTemplates] = useState({
     seedance: [
       {
+        id: "1",
         name: "Product Showcase",
         prompt: "Smooth 360-degree rotation showcasing the product with professional lighting",
       },
       {
+        id: "2",
         name: "Nature Scene",
         prompt: "Gentle camera movement through a serene natural landscape with flowing elements",
       },
-      { name: "Portrait Animation", prompt: "Subtle facial animation with natural breathing and eye movement" },
-      { name: "Architecture Tour", prompt: "Cinematic walkthrough of the building with dramatic lighting changes" },
-      { name: "Food Styling", prompt: "Appetizing close-up with steam effects and rotating presentation" },
+      {
+        id: "3",
+        name: "Portrait Animation",
+        prompt: "Subtle facial animation with natural breathing and eye movement",
+      },
+      {
+        id: "4",
+        name: "Architecture Tour",
+        prompt: "Cinematic walkthrough of the building with dramatic lighting changes",
+      },
+      {
+        id: "5",
+        name: "Food Styling",
+        prompt: "Appetizing close-up with steam effects and rotating presentation",
+      },
     ],
     kontext: [
-      { name: "Style Transfer", prompt: "Convert to watercolor painting style with visible brush strokes" },
-      { name: "Season Change", prompt: "Change the season to autumn with colorful falling leaves" },
-      { name: "Time of Day", prompt: "Change to golden hour lighting with warm sunset colors" },
-      { name: "Weather Effect", prompt: "Add gentle rain with realistic water droplets and reflections" },
-      { name: "Background Swap", prompt: "Replace background with a modern minimalist studio setting" },
+      {
+        id: "1",
+        name: "Style Transfer",
+        prompt: "Convert to watercolor painting style with visible brush strokes",
+      },
+      {
+        id: "2",
+        name: "Season Change",
+        prompt: "Change the season to autumn with colorful falling leaves",
+      },
+      {
+        id: "3",
+        name: "Time of Day",
+        prompt: "Change to golden hour lighting with warm sunset colors",
+      },
+      {
+        id: "4",
+        name: "Weather Effect",
+        prompt: "Add gentle rain with realistic water droplets and reflections",
+      },
+      {
+        id: "5",
+        name: "Background Swap",
+        prompt: "Replace background with a modern minimalist studio setting",
+      },
     ],
-  }
+  })
 
   // Initialize IndexedDB
   useEffect(() => {
@@ -139,12 +187,151 @@ export default function SeedanceGenerator() {
         await dbManager.init()
         await loadPreviousJobs()
         await dbManager.cleanupOldJobs(24)
+        loadTemplatesFromStorage()
       } catch (error) {
         console.error("Failed to initialize IndexedDB:", error)
       }
     }
     initDB()
   }, [])
+
+  const loadTemplatesFromStorage = () => {
+    try {
+      const savedTemplates = localStorage.getItem("seedance-templates")
+      if (savedTemplates) {
+        setTemplates(JSON.parse(savedTemplates))
+      }
+    } catch (error) {
+      console.error("Failed to load templates:", error)
+    }
+  }
+
+  const saveTemplatesToStorage = (newTemplates: typeof templates) => {
+    try {
+      localStorage.setItem("seedance-templates", JSON.stringify(newTemplates))
+    } catch (error) {
+      console.error("Failed to save templates:", error)
+    }
+  }
+
+  const addNewTemplate = () => {
+    if (!newTemplateName.trim() || !newTemplatePrompt.trim()) {
+      toast({
+        title: "Missing Information",
+        description: "Please enter both template name and prompt",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const newTemplate: Template = {
+      id: Date.now().toString(),
+      name: newTemplateName.trim(),
+      prompt: newTemplatePrompt.trim(),
+    }
+
+    const currentTemplates = isKontextMode ? templates.kontext : templates.seedance
+    const updatedTemplates = {
+      ...templates,
+      [isKontextMode ? "kontext" : "seedance"]: [...currentTemplates, newTemplate],
+    }
+
+    setTemplates(updatedTemplates)
+    saveTemplatesToStorage(updatedTemplates)
+    setNewTemplateName("")
+    setNewTemplatePrompt("")
+
+    toast({
+      title: "Template Added",
+      description: `"${newTemplate.name}" has been added to your templates`,
+    })
+  }
+
+  const startEditingTemplate = (template: Template) => {
+    setEditingTemplate(template.id)
+    setEditTemplateName(template.name)
+    setEditTemplatePrompt(template.prompt)
+  }
+
+  const saveEditingTemplate = (templateId: string) => {
+    if (!editTemplateName.trim() || !editTemplatePrompt.trim()) {
+      toast({
+        title: "Missing Information",
+        description: "Please enter both template name and prompt",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const currentTemplates = isKontextMode ? templates.kontext : templates.seedance
+    const updatedCurrentTemplates = currentTemplates.map((template) =>
+      template.id === templateId
+        ? { ...template, name: editTemplateName.trim(), prompt: editTemplatePrompt.trim() }
+        : template,
+    )
+
+    const updatedTemplates = {
+      ...templates,
+      [isKontextMode ? "kontext" : "seedance"]: updatedCurrentTemplates,
+    }
+
+    setTemplates(updatedTemplates)
+    saveTemplatesToStorage(updatedTemplates)
+    setEditingTemplate(null)
+    setEditTemplateName("")
+    setEditTemplatePrompt("")
+
+    toast({
+      title: "Template Updated",
+      description: "Template has been saved successfully",
+    })
+  }
+
+  const cancelEditingTemplate = () => {
+    setEditingTemplate(null)
+    setEditTemplateName("")
+    setEditTemplatePrompt("")
+  }
+
+  const deleteTemplate = (templateId: string) => {
+    const currentTemplates = isKontextMode ? templates.kontext : templates.seedance
+    const updatedCurrentTemplates = currentTemplates.filter((template) => template.id !== templateId)
+
+    const updatedTemplates = {
+      ...templates,
+      [isKontextMode ? "kontext" : "seedance"]: updatedCurrentTemplates,
+    }
+
+    setTemplates(updatedTemplates)
+    saveTemplatesToStorage(updatedTemplates)
+
+    toast({
+      title: "Template Deleted",
+      description: "Template has been removed",
+    })
+  }
+
+  const applyTemplate = (template: Template) => {
+    if (selectedImages.size === 0) {
+      toast({
+        title: "No Images Selected",
+        description: "Please select images first, then apply the template",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setImages((prev) =>
+      prev.map((img) =>
+        selectedImages.has(img.id) ? { ...img, [isKontextMode ? "editPrompt" : "prompt"]: template.prompt } : img,
+      ),
+    )
+
+    toast({
+      title: "Template Applied",
+      description: `"${template.name}" applied to ${selectedImages.size} selected images`,
+    })
+  }
 
   const loadPreviousJobs = async () => {
     try {
@@ -985,49 +1172,126 @@ export default function SeedanceGenerator() {
         </CardContent>
       </Card>
 
-      {/* Add templates button and modal after the settings card: */}
+      {/* Enhanced Templates Panel */}
       <Card className="mb-6">
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
-            Quick Templates
+            <div className="flex items-center gap-2">
+              Quick Templates
+              {selectedImages.size > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {selectedImages.size} selected
+                </Badge>
+              )}
+            </div>
             <Button variant="outline" size="sm" onClick={() => setShowTemplates(!showTemplates)}>
               {showTemplates ? "Hide" : "Show"} Templates
             </Button>
           </CardTitle>
         </CardHeader>
         {showTemplates && (
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {(isKontextMode ? templates.kontext : templates.seedance).map((template, index) => (
-                <Button
-                  key={index}
-                  variant="outline"
-                  className="h-auto p-3 text-left flex-col items-start bg-transparent"
-                  onClick={() => {
-                    if (selectedImages.size > 0) {
-                      // Apply to selected images
-                      setImages((prev) =>
-                        prev.map((img) =>
-                          selectedImages.has(img.id)
-                            ? { ...img, [isKontextMode ? "editPrompt" : "prompt"]: template.prompt }
-                            : img,
-                        ),
-                      )
-                    } else {
-                      // Apply to all images
-                      setImages((prev) =>
-                        prev.map((img) => ({ ...img, [isKontextMode ? "editPrompt" : "prompt"]: template.prompt })),
-                      )
-                    }
-                    toast({
-                      title: "Template Applied",
-                      description: `"${template.name}" applied to ${selectedImages.size || images.length} images`,
-                    })
-                  }}
-                >
-                  <div className="font-medium">{template.name}</div>
-                  <div className="text-xs text-muted-foreground mt-1">{template.prompt}</div>
+          <CardContent className="space-y-4">
+            {/* Selection Notice */}
+            {selectedImages.size === 0 && (
+              <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p className="text-sm text-yellow-800">
+                  💡 <strong>Tip:</strong> Select images first, then click a template to apply it only to selected
+                  images.
+                </p>
+              </div>
+            )}
+
+            {/* Add New Template */}
+            <div className="p-4 border rounded-lg bg-gray-50">
+              <h4 className="font-medium mb-3">Create New Template</h4>
+              <div className="space-y-3">
+                <Input
+                  placeholder="Template name (e.g., 'My Custom Style')"
+                  value={newTemplateName}
+                  onChange={(e) => setNewTemplateName(e.target.value)}
+                />
+                <Textarea
+                  placeholder="Template prompt..."
+                  value={newTemplatePrompt}
+                  onChange={(e) => setNewTemplatePrompt(e.target.value)}
+                  className="min-h-[60px]"
+                />
+                <Button onClick={addNewTemplate} size="sm" className="w-full">
+                  <Plus className="h-3 w-3 mr-1" />
+                  Add Template
                 </Button>
+              </div>
+            </div>
+
+            {/* Existing Templates */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(isKontextMode ? templates.kontext : templates.seedance).map((template) => (
+                <div key={template.id} className="border rounded-lg p-3 bg-white">
+                  {editingTemplate === template.id ? (
+                    <div className="space-y-3">
+                      <Input
+                        value={editTemplateName}
+                        onChange={(e) => setEditTemplateName(e.target.value)}
+                        placeholder="Template name"
+                      />
+                      <Textarea
+                        value={editTemplatePrompt}
+                        onChange={(e) => setEditTemplatePrompt(e.target.value)}
+                        placeholder="Template prompt"
+                        className="min-h-[60px]"
+                      />
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={() => saveEditingTemplate(template.id)} className="flex-1">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Save
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={cancelEditingTemplate}
+                          className="flex-1 bg-transparent"
+                        >
+                          <X className="h-3 w-3 mr-1" />
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <h5 className="font-medium text-sm">{template.name}</h5>
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-6 p-0"
+                            onClick={() => startEditingTemplate(template)}
+                          >
+                            <Edit className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
+                            onClick={() => deleteTemplate(template.id)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-600 mb-2">{template.prompt}</p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-xs bg-transparent"
+                        onClick={() => applyTemplate(template)}
+                        disabled={selectedImages.size === 0}
+                      >
+                        Apply to Selected ({selectedImages.size})
+                      </Button>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           </CardContent>
