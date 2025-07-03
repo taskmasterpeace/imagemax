@@ -47,7 +47,7 @@ import {
   Clock,
   Copy,
   CheckCircle2,
-  Maximize2,
+  Search,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -1126,6 +1126,18 @@ export default function VideoGeneratorApp() {
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() =>
+                                    openFullscreenImage(
+                                      image.preview || "/placeholder.svg",
+                                      "kontext"
+                                    )
+                                  }
+                                >
+                                  <Search className="w-4 h-4" />
+                                </Button>
                               </div>
                             </div>
                             {image.status !== "idle" && (
@@ -1219,7 +1231,7 @@ export default function VideoGeneratorApp() {
                                         )
                                       }
                                     >
-                                      <Maximize2 className="w-3 h-3" />
+                                      <Search className="w-3 h-3" />
                                     </Button>
                                   </div>
                                 </div>
@@ -1362,6 +1374,19 @@ export default function VideoGeneratorApp() {
                                 onClick={() => removeImage(image.id, true)}
                               >
                                 <X className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={() =>
+                                  openFullscreenImage(
+                                    image.preview || "/placeholder.svg",
+                                    "gen4"
+                                  )
+                                }
+                              >
+                                <Search className="w-4 h-4" />
                               </Button>
                             </div>
                             <div className="p-3">
@@ -1592,7 +1617,7 @@ export default function VideoGeneratorApp() {
                                             )
                                           }
                                         >
-                                          <Maximize2 className="w-3 h-3" />
+                                          <Search className="w-3 h-3" />
                                         </Button>
                                       </div>
                                     </div>
@@ -1934,8 +1959,8 @@ export default function VideoGeneratorApp() {
               <img
                 src={fullscreenImage || "/placeholder.svg"}
                 alt="Fullscreen preview"
-                className="max-w-full max-h-[90vh] object-contain"
-                onClick={(e) => e.stopPropagation()}
+                className="max-w-full max-h-[90vh] object-contain cursor-zoom-out"
+                onClick={closeFullscreenImage}
               />
             )}
             {/* Close button */}
