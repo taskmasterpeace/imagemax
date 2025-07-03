@@ -61,6 +61,7 @@ interface ImageData {
   selected: boolean;
   status: "idle" | "processing" | "completed" | "failed";
   outputUrl?: string;
+  videos?: string[];
   error?: string;
   editHistory?: EditHistoryItem[];
 }
@@ -136,6 +137,7 @@ export default function VideoGeneratorApp() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [fullscreenVideo, setFullscreenVideo] = useState<string | null>(null);
+  const [carouselIndex, setCarouselIndex] = useState<{ [key: string]: number }>({});
   const [generatedVideos, setGeneratedVideos] = useState<{
     filename: string;
     prompt: string;
@@ -150,7 +152,7 @@ export default function VideoGeneratorApp() {
   const [gen4Prompt, setGen4Prompt] = useState("");
   const [gen4Settings, setGen4Settings] = useState({
     aspectRatio: "16:9",
-    resolution: "720p",
+    resolution: "480p",
     seed: undefined as number | undefined,
   });
   const [gen4Generations, setGen4Generations] = useState<Gen4Generation[]>([]);
@@ -160,7 +162,7 @@ export default function VideoGeneratorApp() {
   const [settings, setSettings] = useState({
     seedance: {
       model: "seedance-1-lite",
-      resolution: "720p",
+      resolution: "480p",
       duration: 5,
       cameraFixed: false,
     },
@@ -413,10 +415,14 @@ export default function VideoGeneratorApp() {
       prev.map((img) => {
         const task = status.tasks.find((t) => t.filename === img.file.name);
         if (task) {
+          const updatedVideos = task.outputUrl
+            ? [...(img.videos || []), task.outputUrl]
+            : img.videos;
           return {
             ...img,
             status: task.status as any,
-            outputUrl: task.outputUrl,
+            outputUrl: task.outputUrl ? task.outputUrl : img.outputUrl,
+            videos: updatedVideos,
             error: task.error,
           };
         }
@@ -473,14 +479,9 @@ export default function VideoGeneratorApp() {
 
       const result = await response.json();
       setGeneratedVideos(result?.generatedResponse);
-      // setJobStatus(result)
+      // kick off job-status polling so `updateImagesWithResults` will add the outputUrl & videos
+      setJobStatus(result);
 
-      // Update image statuses to processing
-      setImages((prev) =>
-        prev.map((img) =>
-          img.selected ? { ...img, status: "completed" } : img
-        )
-      );
       setIsGenerating(false);
 
       toast({
@@ -1080,8 +1081,10 @@ export default function VideoGeneratorApp() {
                       }
                     >
                       {filteredImages.map((image, index) => {
-                        const mediaUrl = generatedVideos.find(
-                          (img) => img?.filename === image?.file?.name
+                        const videos = image.videos && image.videos.length > 0 ? image.videos : image.outputUrl ? [image.outputUrl] : [];
+                        const currentIdx = carouselIndex[image.id] ?? 0;
+                        const mediaUrl = videos[currentIdx] ?? generatedVideos.find(
+                          (vid) => vid?.filename === image?.file?.name
                         )?.outputUrl;
                         return (
                         <div
@@ -1198,7 +1201,7 @@ export default function VideoGeneratorApp() {
                                   : "Edit with Kontext"}
                               </Button>
                             )}
-                            {generatedVideos?.length > 0 && (
+                            {mediaUrl && (
                               <div className="mt-2 relative overflow-hidden rounded-lg border bg-white group">
                                 {mode === "seedance" ? (
                                   <video
@@ -1208,13 +1211,38 @@ export default function VideoGeneratorApp() {
                                   />
                                 ) : (
                                   <img
-                                    src={
-                                      mediaUrl ||
-                                      "/placeholder.svg"
-                                    }
+                                    src={mediaUrl}
                                     alt="Edited"
                                     className="w-full rounded"
                                   />
+                                )}
+                                {videos.length > 1 && (
+                                  <div className="absolute inset-0 flex items-center justify-between px-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button
+                                      className="bg-black/50 text-white rounded-full w-6 h-6 flex items-center justify-center"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setCarouselIndex((prev) => ({
+                                          ...prev,
+                                          [image.id]: (currentIdx - 1 + videos.length) % videos.length,
+                                        }));
+                                      }}
+                                    >
+                                      ‹
+                                    </button>
+                                    <button
+                                      className="bg-black/50 text-white rounded-full w-6 h-6 flex items-center justify-center"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setCarouselIndex((prev) => ({
+                                          ...prev,
+                                          [image.id]: (currentIdx + 1) % videos.length,
+                                        }));
+                                      }}
+                                    >
+                                      ›
+                                    </button>
+                                  </div>
                                 )}
 
                                 <div className="absolute top-2 right-2 opacity-0 bg-black/0 group-hover:bg-black/20 group-hover:opacity-100 transition-opacity">
@@ -1502,7 +1530,8 @@ export default function VideoGeneratorApp() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="720p">720x1280</SelectItem>
+                            <SelectItem value="480p">480x854</SelectItem>
+                             <SelectItem value="720p">720x1280</SelectItem>
                             <SelectItem value="1080p">1080x1920</SelectItem>
                           </SelectContent>
                         </Select>
@@ -1590,7 +1619,7 @@ export default function VideoGeneratorApp() {
                                 className="group relative"
                               >
                                 <div className="relative overflow-hidden rounded-lg border bg-white">
-                                  <Image
+                                  <img
                                     src={
                                       generation.outputUrl
                                         ? generation.outputUrl
@@ -1735,7 +1764,8 @@ export default function VideoGeneratorApp() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="720p">HD (1280x720)</SelectItem>
+                        <SelectItem value="480p">SD (854x480)</SelectItem>
+                         <SelectItem value="720p">HD (1280x720)</SelectItem>
                         <SelectItem value="1080p">
                           Full HD (1920x1080)
                         </SelectItem>
