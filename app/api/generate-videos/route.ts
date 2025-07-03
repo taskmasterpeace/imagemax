@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
     }
 
     const metadata = JSON.parse(metadataStr);
-    const { prompts, resolution, duration, camera_fixed, mode } = metadata;
+    const { prompts, resolution, duration, camera_fixed, mode, seedanceModel } = metadata;
 
     // Upload images to Replicate and store their filenames
     const imagesUrlsAndNames = await Promise.all(
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
     const { model, settings } =
       mode === "seedance"
         ? {
-            model: "bytedance/seedance-1-lite",
+            model: `bytedance/${seedanceModel}`,
             settings: (imageUrl: string, prompt: string) => ({
               image: imageUrl,
               fps: 24,

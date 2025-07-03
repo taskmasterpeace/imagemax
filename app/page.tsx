@@ -1,6 +1,6 @@
 "use client";
 
-import type React from "react";
+import React from "react";
 
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -49,7 +49,13 @@ import {
   CheckCircle2,
   Search,
 } from "lucide-react";
-import Image from "next/image";
+import {
+  GEN4_RESOLUTIONS,
+  SEEDANCE_DURATIONS,
+  SEEDANCE_LITE_RESOLUTIONS,
+  SEEDANCE_MODELS,
+  SEEDANCE_PRO_RESOLUTIONS,
+} from "@/static/data";
 
 // Types and interfaces
 interface ImageData {
@@ -137,14 +143,18 @@ export default function VideoGeneratorApp() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [fullscreenVideo, setFullscreenVideo] = useState<string | null>(null);
-  const [carouselIndex, setCarouselIndex] = useState<{ [key: string]: number }>({});
-  const [generatedVideos, setGeneratedVideos] = useState<{
-    filename: string;
-    prompt: string;
-    status: string;
-    outputUrl?: string;
-  }[]>([]);
-  
+  const [carouselIndex, setCarouselIndex] = useState<{ [key: string]: number }>(
+    {}
+  );
+  const [generatedVideos, setGeneratedVideos] = useState<
+    {
+      filename: string;
+      prompt: string;
+      status: string;
+      outputUrl?: string;
+    }[]
+  >([]);
+
   // Gen 4 specific state
   const [gen4ReferenceImages, setGen4ReferenceImages] = useState<
     Gen4ReferenceImage[]
@@ -152,7 +162,7 @@ export default function VideoGeneratorApp() {
   const [gen4Prompt, setGen4Prompt] = useState("");
   const [gen4Settings, setGen4Settings] = useState({
     aspectRatio: "16:9",
-    resolution: "480p",
+    resolution: "720p",
     seed: undefined as number | undefined,
   });
   const [gen4Generations, setGen4Generations] = useState<Gen4Generation[]>([]);
@@ -458,11 +468,11 @@ export default function VideoGeneratorApp() {
       });
 
       const metadata = {
-        prompts: selectedImages.map((img) => img.prompt),
-        model: settings.seedance.model,
-        resolution: settings.seedance.resolution,
-        duration: settings.seedance.duration,
-        camera_fixed: settings.seedance.cameraFixed,
+        prompts: selectedImages?.map((img) => img.prompt),
+        seedanceModel: settings?.seedance?.model,
+        resolution: settings?.seedance?.resolution,
+        duration: settings?.seedance?.duration,
+        camera_fixed: settings?.seedance?.cameraFixed,
         mode: mode,
       };
 
@@ -1074,19 +1084,26 @@ export default function VideoGeneratorApp() {
                   </div>
 
                   <div
-                      className={
-                        viewMode === "grid"
-                          ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
-                          : "space-y-4"
-                      }
-                    >
-                      {filteredImages.map((image, index) => {
-                        const videos = image.videos && image.videos.length > 0 ? image.videos : image.outputUrl ? [image.outputUrl] : [];
-                        const currentIdx = carouselIndex[image.id] ?? 0;
-                        const mediaUrl = videos[currentIdx] ?? generatedVideos.find(
+                    className={
+                      viewMode === "grid"
+                        ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
+                        : "space-y-4"
+                    }
+                  >
+                    {filteredImages.map((image, index) => {
+                      const videos =
+                        image.videos && image.videos.length > 0
+                          ? image.videos
+                          : image.outputUrl
+                          ? [image.outputUrl]
+                          : [];
+                      const currentIdx = carouselIndex[image.id] ?? 0;
+                      const mediaUrl =
+                        videos[currentIdx] ??
+                        generatedVideos.find(
                           (vid) => vid?.filename === image?.file?.name
                         )?.outputUrl;
-                        return (
+                      return (
                         <div
                           key={image.id}
                           className={`m-1 relative group border rounded-lg overflow-hidden ${
@@ -1224,7 +1241,9 @@ export default function VideoGeneratorApp() {
                                         e.stopPropagation();
                                         setCarouselIndex((prev) => ({
                                           ...prev,
-                                          [image.id]: (currentIdx - 1 + videos.length) % videos.length,
+                                          [image.id]:
+                                            (currentIdx - 1 + videos.length) %
+                                            videos.length,
                                         }));
                                       }}
                                     >
@@ -1236,7 +1255,8 @@ export default function VideoGeneratorApp() {
                                         e.stopPropagation();
                                         setCarouselIndex((prev) => ({
                                           ...prev,
-                                          [image.id]: (currentIdx + 1) % videos.length,
+                                          [image.id]:
+                                            (currentIdx + 1) % videos.length,
                                         }));
                                       }}
                                     >
@@ -1253,9 +1273,10 @@ export default function VideoGeneratorApp() {
                                       className="h-8 w-8 p-0"
                                       onClick={() =>
                                         openFullscreenImage(
-                                          mediaUrl ||
-                                          "/placeholder.svg", 
-                                          mode === "seedance" ? "seedance" : "kontext"
+                                          mediaUrl || "/placeholder.svg",
+                                          mode === "seedance"
+                                            ? "seedance"
+                                            : "kontext"
                                         )
                                       }
                                     >
@@ -1273,12 +1294,12 @@ export default function VideoGeneratorApp() {
                             )}
                           </div>
                         </div>
-                        )
-                      })}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Generation Controls */}
             {mode === "seedance" && images.length > 0 && (
@@ -1530,9 +1551,15 @@ export default function VideoGeneratorApp() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="480p">480x854</SelectItem>
-                             <SelectItem value="720p">720x1280</SelectItem>
-                            <SelectItem value="1080p">1080x1920</SelectItem>
+                            {GEN4_RESOLUTIONS.map((aspectRatio) => (
+                              <SelectItem
+                                defaultValue={GEN4_RESOLUTIONS[0].value}
+                                key={aspectRatio.value}
+                                value={aspectRatio.value}
+                              >
+                                {aspectRatio.name}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>
@@ -1613,95 +1640,92 @@ export default function VideoGeneratorApp() {
                     ) : (
                       <div className="grid grid-cols-1 gap-4">
                         {gen4Generations.length > 0 ? (
-                            gen4Generations.map((generation, index) => (
-                              <div
-                                key={generation.id}
-                                className="group relative"
-                              >
-                                <div className="relative overflow-hidden rounded-lg border bg-white">
-                                  <img
-                                    src={
-                                      generation.outputUrl
-                                        ? generation.outputUrl
-                                        : "/placeholder.svg?height=512&width=512"
-                                    }
-                                    alt="Generated image"
-                                    width={300}
-                                    height={300}
-                                    className="w-full aspect-square object-cover transition-transform group-hover:scale-105"
-                                  />
+                          gen4Generations.map((generation, index) => (
+                            <div key={generation.id} className="group relative">
+                              <div className="relative overflow-hidden rounded-lg border bg-white">
+                                <img
+                                  src={
+                                    generation.outputUrl
+                                      ? generation.outputUrl
+                                      : "/placeholder.svg?height=512&width=512"
+                                  }
+                                  alt="Generated image"
+                                  width={300}
+                                  height={300}
+                                  className="w-full aspect-square object-cover transition-transform group-hover:scale-105"
+                                />
 
-                                  {/* Overlay Actions */}
-                                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors">
-                                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <div className="flex gap-1">
-                                        <Button
-                                          size="sm"
-                                          variant="secondary"
-                                          className="h-8 w-8 p-0"
-                                          onClick={() =>
-                                            openFullscreenImage(
-                                              generation?.outputUrl || "",
-                                              "gen4"
-                                            )
-                                          }
-                                        >
-                                          <Search className="w-3 h-3" />
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {/* Image Info */}
-                                <div className="mt-2 space-y-2">
-                                  <div className="flex items-center justify-between text-xs text-gray-500">
-                                    <span className="flex items-center gap-1">
-                                      <Clock className="w-3 h-3" />
-                                      {generation.timestamp}
-                                    </span>
-                                  </div>
-
-                                  {/* Action Buttons */}
-                                  <div className="flex gap-1">
-                                    {generation?.outputUrl && (
+                                {/* Overlay Actions */}
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors">
+                                  <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <div className="flex gap-1">
                                       <Button
                                         size="sm"
-                                        variant="outline"
-                                        className="flex-1 h-8 text-xs bg-transparent"
+                                        variant="secondary"
+                                        className="h-8 w-8 p-0"
                                         onClick={() =>
-                                          handleDownload(
-                                            generation?.outputUrl || ""
+                                          openFullscreenImage(
+                                            generation?.outputUrl || "",
+                                            "gen4"
                                           )
                                         }
                                       >
-                                        <Download className="w-3 h-3 mr-1" />
-                                        Download
+                                        <Search className="w-3 h-3" />
                                       </Button>
-                                    )}
-                                    {generation?.outputUrl && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-8 w-8 p-0 bg-transparent"
-                                        onClick={() =>
-                                          handleCopy(generation?.outputUrl || "")
-                                        }
-                                      >
-                                        <Copy className="w-3 h-3" />
-                                      </Button>
-                                    )}
+                                    </div>
                                   </div>
                                 </div>
                               </div>
-                            ))
-                          ) : (
-                            <div className="flex items-center justify-center py-12 space-y-4">
-                              <p>No generations found.</p>
+
+                              {/* Image Info */}
+                              <div className="mt-2 space-y-2">
+                                <div className="flex items-center justify-between text-xs text-gray-500">
+                                  <span className="flex items-center gap-1">
+                                    <Clock className="w-3 h-3" />
+                                    {generation.timestamp}
+                                  </span>
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex gap-1">
+                                  {generation?.outputUrl && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="flex-1 h-8 text-xs bg-transparent"
+                                      onClick={() =>
+                                        handleDownload(
+                                          generation?.outputUrl || ""
+                                        )
+                                      }
+                                    >
+                                      <Download className="w-3 h-3 mr-1" />
+                                      Download
+                                    </Button>
+                                  )}
+                                  {generation?.outputUrl && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-8 w-8 p-0 bg-transparent"
+                                      onClick={() =>
+                                        handleCopy(generation?.outputUrl || "")
+                                      }
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
                             </div>
-                          )}
-                        </div>
-                      )}
+                          ))
+                        ) : (
+                          <div className="flex items-center justify-center py-12 space-y-4">
+                            <p>No generations found.</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -1737,13 +1761,11 @@ export default function VideoGeneratorApp() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="minimax-video-01">
-                          MiniMax Video 01
-                        </SelectItem>
-                        <SelectItem value="runway-gen3">Runway Gen3</SelectItem>
-                        <SelectItem value="luma-dream-machine">
-                          Luma Dream Machine
-                        </SelectItem>
+                        {SEEDANCE_MODELS.map((model) => (
+                          <SelectItem key={model.value} value={model.value}>
+                            {model.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -1764,12 +1786,27 @@ export default function VideoGeneratorApp() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="480p">SD (854x480)</SelectItem>
-                         <SelectItem value="720p">HD (1280x720)</SelectItem>
-                        <SelectItem value="1080p">
-                          Full HD (1920x1080)
-                        </SelectItem>
-                        <SelectItem value="2160p">Vertical HD</SelectItem>
+                        {settings?.seedance?.model === SEEDANCE_MODELS[0].value
+                          ? SEEDANCE_LITE_RESOLUTIONS.map((resolution) => (
+                              <SelectItem
+                                defaultValue={
+                                  SEEDANCE_LITE_RESOLUTIONS[0].value
+                                }
+                                key={resolution.value}
+                                value={resolution.value}
+                              >
+                                {resolution.name}
+                              </SelectItem>
+                            ))
+                          : SEEDANCE_PRO_RESOLUTIONS.map((resolution) => (
+                              <SelectItem
+                                defaultValue={SEEDANCE_PRO_RESOLUTIONS[0].value}
+                                key={resolution.value}
+                                value={resolution.value}
+                              >
+                                {resolution.name}
+                              </SelectItem>
+                            ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -1777,19 +1814,32 @@ export default function VideoGeneratorApp() {
                     <Label className="text-sm font-medium mb-2 block">
                       Duration: {settings.seedance.duration}s
                     </Label>
-                    <Slider
-                      value={[settings.seedance.duration]}
-                      onValueChange={([value]) =>
+                    <Select
+                      value={settings.seedance.duration.toString()}
+                      onValueChange={(value) =>
                         setSettings((prev) => ({
                           ...prev,
-                          seedance: { ...prev.seedance, duration: value },
+                          seedance: {
+                            ...prev.seedance,
+                            duration: Number(value),
+                          },
                         }))
                       }
-                      min={3}
-                      max={10}
-                      step={1}
-                      className="w-full"
-                    />
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SEEDANCE_DURATIONS.map((duration) => (
+                          <SelectItem
+                            key={duration.value}
+                            value={duration.value.toString()}
+                          >
+                            {duration.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="flex items-center space-x-2">
                     <Switch

@@ -101,6 +101,11 @@ export async function POST(request: NextRequest) {
     );
 
     if (!generateResponse.ok) {
+      const errorText = await generateResponse.text();
+      console.error(
+        `🔴 Gen 4 Generation Failed: Status ${generateResponse.status}`,
+        errorText
+      );
       return NextResponse.json(
         { error: "Failed to create prediction" },
         { status: generateResponse.status }
