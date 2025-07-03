@@ -21,7 +21,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/hooks/use-toast";
 import {
   Upload,
@@ -1073,8 +1072,7 @@ export default function VideoGeneratorApp() {
                     </div>
                   </div>
 
-                  <ScrollArea className="h-[450px]">
-                    <div
+                  <div
                       className={
                         viewMode === "grid"
                           ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
@@ -1238,10 +1236,9 @@ export default function VideoGeneratorApp() {
                         )
                       })}
                     </div>
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-            )}
+                  </CardContent>
+                </Card>
+              )}
 
             {/* Generation Controls */}
             {mode === "seedance" && images.length > 0 && (
@@ -1560,9 +1557,8 @@ export default function VideoGeneratorApp() {
                         </div>
                       </div>
                     ) : (
-                      <ScrollArea className="h-[500px]">
-                        <div className="grid grid-cols-1 gap-4">
-                          {gen4Generations.length > 0 ? (
+                      <div className="grid grid-cols-1 gap-4">
+                        {gen4Generations.length > 0 ? (
                             gen4Generations.map((generation, index) => (
                               <div
                                 key={generation.id}
@@ -1651,8 +1647,7 @@ export default function VideoGeneratorApp() {
                             </div>
                           )}
                         </div>
-                      </ScrollArea>
-                    )}
+                      )}
                   </CardContent>
                 </Card>
               </div>
