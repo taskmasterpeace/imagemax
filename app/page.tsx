@@ -48,6 +48,7 @@ import {
   Copy,
   CheckCircle2,
   Maximize2,
+  Search,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -1126,6 +1127,18 @@ export default function VideoGeneratorApp() {
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() =>
+                                    openFullscreenImage(
+                                      image.preview || "/placeholder.svg",
+                                      "workspace"
+                                    )
+                                  }
+                                >
+                                  <Search className="w-4 h-4" />
+                                </Button>
                               </div>
                             </div>
                             {image.status !== "idle" && (
@@ -1935,7 +1948,6 @@ export default function VideoGeneratorApp() {
                 src={fullscreenImage || "/placeholder.svg"}
                 alt="Fullscreen preview"
                 className="max-w-full max-h-[90vh] object-contain"
-                onClick={(e) => e.stopPropagation()}
               />
             )}
             {/* Close button */}
