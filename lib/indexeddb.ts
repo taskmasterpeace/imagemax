@@ -1,4 +1,6 @@
-interface JobData {
+import { ImageData } from "@/types"
+
+export interface JobData {
   jobId: string
   status: "processing" | "completed" | "failed" | "merging"
   tasks: TaskData[]
@@ -7,7 +9,7 @@ interface JobData {
   mergedOutputUrl?: string
 }
 
-interface TaskData {
+export interface TaskData {
   filename: string
   prompt: string
   status: "queued" | "processing" | "completed" | "failed"
@@ -47,6 +49,10 @@ class IndexedDBManager {
         }
       }
     })
+  }
+
+  constructor() {
+    this.init()
   }
 
   async saveJob(job: JobData): Promise<void> {
@@ -101,17 +107,21 @@ class IndexedDBManager {
     })
   }
 
-  async saveImage(id: string, jobId: string, file: File, preview: string): Promise<void> {
+  async saveImage(id: string, file: File, fileUrl: string, preview: string, prompt: string, selected: boolean, status: string, videos: string[], mode: "seedance" | "kontext"): Promise<void> {
     if (!this.db) throw new Error("Database not initialized")
 
     const imageData = {
       id,
-      jobId,
       filename: file.name,
       type: file.type,
       size: file.size,
+      fileUrl,
       preview,
-      data: await file.arrayBuffer(),
+      prompt,
+      selected,
+      status,
+      videos,
+      mode
     }
 
     return new Promise((resolve, reject) => {
@@ -124,7 +134,7 @@ class IndexedDBManager {
     })
   }
 
-  async getImage(id: string): Promise<File | null> {
+  async getImage(id: string): Promise<ImageData | null> {
     if (!this.db) throw new Error("Database not initialized")
 
     return new Promise((resolve, reject) => {
@@ -136,8 +146,7 @@ class IndexedDBManager {
       request.onsuccess = () => {
         const result = request.result
         if (result) {
-          const file = new File([result.data], result.filename, { type: result.type })
-          resolve(file)
+          resolve(result)
         } else {
           resolve(null)
         }
@@ -158,51 +167,39 @@ class IndexedDBManager {
     }
   }
 
-  async getImages(): Promise<any[]> {
-    try {
-      const jobs = await this.getAllJobs()
-      const allImages: any[] = []
+  async getImages(): Promise<ImageData[]> {
+    if (!this.db) throw new Error("Database not initialized")
 
-      for (const job of jobs) {
-        for (const task of job.tasks) {
-          if (task.outputUrl) {
-            allImages.push({
-              id: `${job.jobId}_${task.filename}`,
-              file: { name: task.filename },
-              preview: task.outputUrl,
-              prompt: task.prompt,
-              selected: false,
-              status: task.status,
-              outputUrl: task.outputUrl,
-              error: task.error,
-            })
-          }
-        }
-      }
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["images"], "readonly")
+      const store = transaction.objectStore("images")
+      const request = store.getAll()
 
-      return allImages
-    } catch (error) {
-      console.error("Error getting images:", error)
-      return []
-    }
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => resolve(request.result)
+    })
   }
 
-  async saveImages(images: any[]): Promise<void> {
-    // For now, we'll just log this since we save jobs differently
-    console.log("Auto-saving images:", images.length)
+  async removeImage(id: string): Promise<void> {
+    if (!this.db) throw new Error("Database not initialized")
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["images"], "readwrite")
+      const store = transaction.objectStore("images")
+      const request = store.delete(id)
+
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => resolve()
+    })
+  }
+
+
+  async saveImages(images: ImageData[]): Promise<void> {
+   // save images to indexedDB
+   for (const image of images) {
+    await this.saveImage(image.id, image.file, image.fileUrl, image.preview, image.prompt, image.selected, image.status, image.videos || [], image.mode)
+   }
   }
 }
 
 export const dbManager = new IndexedDBManager()
-
-export const getImages = async () => {
-  await dbManager.init()
-  return dbManager.getImages()
-}
-
-export const saveImages = async (images: any[]) => {
-  await dbManager.init()
-  return dbManager.saveImages(images)
-}
-
-export type { JobData, TaskData }

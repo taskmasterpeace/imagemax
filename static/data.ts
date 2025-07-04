@@ -1,3 +1,9 @@
+export const MODES = {
+    SEEDANCE: "seedance",
+    KONTEXT: "kontext",
+    GEN4: "gen4",
+};
+
 export const SEEDANCE_MODELS = [
     {
         name: "seedance-1-lite",
