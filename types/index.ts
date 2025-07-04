@@ -10,6 +10,8 @@ export interface ImageData {
   filename?: any;
   id: string;
   file: File;
+  type?: string;
+  size?: number;
   fileUrl: string;
   preview: string;
   prompt: string;

@@ -24,6 +24,10 @@ class IndexedDBManager {
 
   async init(): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (typeof window === "undefined") {
+        resolve()
+        return
+      }
       const request = indexedDB.open(this.dbName, this.version)
 
       request.onerror = () => reject(request.error)
@@ -107,7 +111,7 @@ class IndexedDBManager {
     })
   }
 
-  async saveImage(id: string, file: File, fileUrl: string, preview: string, prompt: string, selected: boolean, status: string, videos: string[], mode: "seedance" | "kontext"): Promise<void> {
+  async saveImage(id: string, file: { name: string, type: string, size: number }, fileUrl: string, preview: string, prompt: string, selected: boolean, status: string, videos: string[], mode: "seedance" | "kontext"): Promise<void> {
     if (!this.db) throw new Error("Database not initialized")
 
     const imageData = {
@@ -127,6 +131,7 @@ class IndexedDBManager {
     return new Promise((resolve, reject) => {
       const transaction = this.db!.transaction(["images"], "readwrite")
       const store = transaction.objectStore("images")
+      console.log("imageData", imageData)
       const request = store.put(imageData)
 
       request.onerror = () => reject(request.error)

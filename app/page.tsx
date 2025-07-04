@@ -30,12 +30,10 @@ import {
   Settings,
   ImageIcon,
   Video,
-  Wand2,
   Sparkles,
   Check,
   X,
   Plus,
-  Star,
   DollarSign,
   Layers,
   Grid,
@@ -43,7 +41,6 @@ import {
   SortAsc,
   SortDesc,
   Tag,
-  Send,
   Clock,
   Copy,
   CheckCircle2,
@@ -57,6 +54,7 @@ import {
   SEEDANCE_PRO_RESOLUTIONS,
 } from "@/static/data";
 import { dbManager } from "@/lib/indexeddb";
+import { copyToClipboard, downloadFile, handleDragOver } from "@/lib/helpers";
 import { convertToBase64 } from "@/lib/utils";
 import {
   ImageData,
@@ -65,6 +63,11 @@ import {
   Gen4ReferenceImage,
   Gen4Generation,
 } from "@/types";
+
+import ModeSelection from "@/app/views/ModeSelection";
+import UploadArea from "@/app/views/UploadArea";
+import TemplatesPanel from "@/app/views/TemplatesPanel";
+import BulkActionsPanel from "@/app/views/BulkActionsPanel";
 
 export default function VideoGeneratorApp() {
   // State management
@@ -95,8 +98,6 @@ export default function VideoGeneratorApp() {
       outputUrl?: string;
     }[]
   >([]);
-
-  console.log("images",images)
 
   // Gen 4 specific state
   const [gen4ReferenceImages, setGen4ReferenceImages] = useState<
@@ -180,9 +181,7 @@ export default function VideoGeneratorApp() {
   const loadFromIndexedDB = async () => {
     try {
       const images = await dbManager.getImages()
-      console.log("images from db", images)
       setImages(images)
-      console.log("Loading from IndexedDB...");
       return images;
     } catch (error) {
       console.error("Error loading from IndexedDB:", error);
@@ -311,10 +310,6 @@ export default function VideoGeneratorApp() {
     handleFileUpload(e.dataTransfer.files, isGen4);
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
   const removeImage = async (id: string, isGen4 = false) => {
     if (isGen4) {
       setGen4ReferenceImages((prev) => prev.filter((img) => img.id !== id));
@@ -400,10 +395,10 @@ export default function VideoGeneratorApp() {
 
   const startGeneration = async () => {
     const selectedImages = images.filter(
-      (img) => img.selected && img.prompt.trim()
+      (img) => img?.selected && img?.prompt?.trim()
     );
 
-    if (selectedImages.length === 0) {
+    if (selectedImages?.length === 0) {
       toast({
         title: "No images selected",
         description: "Please select images with prompts to generate videos",
@@ -464,9 +459,10 @@ export default function VideoGeneratorApp() {
           const videos = img.videos || [];
           if (result.generatedResponse[i].outputUrl) {
             videos.push(result.generatedResponse[i].outputUrl);
+            console.log("videos", videos);
             await dbManager.saveImage(
               image.id,
-              image.file,
+              { name: img?.filename || image.file?.name, type: image?.file?.type || img?.type || "", size: image?.file?.size || img?.size || 0 },
               result?.generatedResponse[i]?.fileUrl || "",
               image.preview,
               image.prompt,
@@ -480,6 +476,7 @@ export default function VideoGeneratorApp() {
         i++;
       }
 
+      loadFromIndexedDB();
       setIsGenerating(false);
 
       toast({
@@ -665,45 +662,7 @@ export default function VideoGeneratorApp() {
   const gen4ImageCount = gen4ReferenceImages.length;
   const gen4GenerationCount = gen4Generations.length;
 
-  const handleCopy = async (fileUrl: string) => {
-    try {
-      await navigator.clipboard.writeText(fileUrl);
-      toast({
-        title: "URL copied to clipboard",
-        description: "URL copied to clipboard!",
-      });
-    } catch (error) {
-      console.error("Failed to copy URL:", error);
-    }
-  };
 
-  const handleDownload = async (fileUrl: string) => {
-    const fileName = fileUrl.split("/").pop() || "image.png";
-
-    try {
-      const response = await fetch(fileUrl, {
-        mode: "cors", // or 'no-cors' if server allows it (limited access though)
-      });
-
-      if (!response.ok) {
-        throw new Error("Network response was not ok");
-      }
-
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-
-      const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      URL.revokeObjectURL(blobUrl);
-    } catch (error) {
-      console.error("Download failed:", error);
-    }
-  };
 
   const openFullscreenImage = (src: string, mode: string) => {
     if (mode === "seedance") {
@@ -769,144 +728,34 @@ export default function VideoGeneratorApp() {
           <TabsContent value="workspace" className="space-y-6" forceMount>
             <div className={`space-y-6 ${activeTab === "workspace" ? "" : "hidden"}`}>
               {/* Mode Selection */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Wand2 className="w-5 h-5" />
-                    Mode Selection
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex gap-4">
-                    <Button
-                      variant={mode === "seedance" ? "default" : "outline"}
-                      onClick={() => setMode("seedance")}
-                      className="flex items-center gap-2"
-                    >
-                      <Video className="w-4 h-4" />
-                      Seedance (Video)
-                    </Button>
-                    <Button
-                      variant={mode === "kontext" ? "default" : "outline"}
-                      onClick={() => setMode("kontext")}
-                      className="flex items-center gap-2"
-                    >
-                      <ImageIcon className="w-4 h-4" />
-                      Kontext (Edit)
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+              <ModeSelection mode={mode} setMode={setMode} />
 
               {/* Upload Area */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Upload className="w-5 h-5" />
-                    Upload Images
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div
-                    className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg p-8 text-center hover:border-purple-400 transition-colors cursor-pointer"
-                    onDrop={handleDrop}
-                    onDragOver={handleDragOver}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Upload className="w-12 h-12 mx-auto mb-4 text-slate-400" />
-                    <p className="text-lg font-medium mb-2">
-                      Drop images here or click to upload
-                    </p>
-                    <p className="text-slate-500">
-                      Support for JPG, PNG, WebP formats
-                    </p>
-                  </div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => handleFileUpload(e.target.files)}
-                  />
-                </CardContent>
-              </Card>
+              <UploadArea
+                handleFileUpload={handleFileUpload}
+                handleDrop={handleDrop}
+                handleDragOver={handleDragOver}
+                fileInputRef={fileInputRef}
+              />
 
               {/* Templates and Bulk Actions */}
               {images.length > 0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <Star className="w-5 h-5" />
-                        Templates
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <Select
-                        value={selectedTemplate}
-                        onValueChange={setSelectedTemplate}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Choose a template" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {templates.map((template) => (
-                            <SelectItem key={template.id} value={template.id}>
-                              <div className="flex items-center justify-between w-full">
-                                <span>{template.name}</span>
-                                <Badge variant="outline" className="ml-2">
-                                  {template.category}
-                                </Badge>
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Button
-                        onClick={applyTemplateToSelected}
-                        disabled={!selectedTemplate || selectedCount === 0}
-                        className="w-full"
-                      >
-                        Apply to Selected ({selectedCount})
-                      </Button>
-                    </CardContent>
-                  </Card>
+                  <TemplatesPanel
+                    templates={templates}
+                    selectedTemplate={selectedTemplate}
+                    setSelectedTemplate={setSelectedTemplate}
+                    selectedCount={selectedCount}
+                    applyTemplateToSelected={applyTemplateToSelected}
+                  />
 
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <Layers className="w-5 h-5" />
-                        Bulk Actions
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <Textarea
-                        placeholder="Enter prompt for all selected images..."
-                        value={bulkPrompt}
-                        onChange={(e) => setBulkPrompt(e.target.value)}
-                        rows={3}
-                      />
-                      <div className="flex gap-2">
-                        <Button
-                          onClick={applyBulkPrompt}
-                          disabled={!bulkPrompt.trim() || selectedCount === 0}
-                          className="flex-1"
-                        >
-                          Apply Bulk Prompt
-                        </Button>
-                        <Button
-                          onClick={sendToGen4}
-                          disabled={selectedCount === 0}
-                          variant="outline"
-                          className="flex items-center gap-2 bg-transparent"
-                        >
-                          <Send className="w-4 h-4" />
-                          Send to Gen 4
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <BulkActionsPanel
+                    bulkPrompt={bulkPrompt}
+                    setBulkPrompt={setBulkPrompt}
+                    selectedCount={selectedCount}
+                    applyBulkPrompt={applyBulkPrompt}
+                    sendToGen4={sendToGen4}
+                  />
                 </div>
               )}
 
@@ -1186,7 +1035,7 @@ export default function VideoGeneratorApp() {
                                     </div>
                                   )}
 
-                                  <div className="absolute top-2 right-2 opacity-0 bg-black/0 group-hover:bg-black/20 group-hover:opacity-100 transition-opacity">
+                                  <div className="absolute top-2 right-2 opacity-0 bg-black/0 group-hover:bg-black/20 group-hover:opacity-100 transition-opacity z-[999]">
                                     <div className="flex gap-1">
                                       <Button
                                         size="sm"
@@ -1620,7 +1469,7 @@ export default function VideoGeneratorApp() {
                                       variant="outline"
                                       className="flex-1 h-8 text-xs bg-transparent"
                                       onClick={() =>
-                                        handleDownload(
+                                        downloadFile(
                                           generation?.outputUrl || ""
                                         )
                                       }
@@ -1635,7 +1484,7 @@ export default function VideoGeneratorApp() {
                                       variant="outline"
                                       className="h-8 w-8 p-0 bg-transparent"
                                       onClick={() =>
-                                        handleCopy(generation?.outputUrl || "")
+                                        copyToClipboard(generation?.outputUrl || "")
                                       }
                                     >
                                       <Copy className="w-3 h-3" />
