@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useCallback } from "react";
 
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -56,75 +56,15 @@ import {
   SEEDANCE_MODELS,
   SEEDANCE_PRO_RESOLUTIONS,
 } from "@/static/data";
-
-// Types and interfaces
-interface ImageData {
-  filename?: any;
-  id: string;
-  file: File;
-  preview: string;
-  prompt: string;
-  selected: boolean;
-  status: "idle" | "processing" | "completed" | "failed";
-  outputUrl?: string;
-  videos?: string[];
-  error?: string;
-  editHistory?: EditHistoryItem[];
-}
-
-interface EditHistoryItem {
-  id: string;
-  prompt: string;
-  imageUrl: string;
-  timestamp: number;
-  model: "dev" | "max";
-}
-
-interface Template {
-  id: string;
-  name: string;
-  prompt: string;
-  category: string;
-  favorite: boolean;
-  usageCount: number;
-}
-
-interface JobStatus {
-  jobId: string;
-  status: "processing" | "completed" | "failed" | "merging";
-  total: number;
-  completed: number;
-  tasks: Array<{
-    filename: string;
-    prompt: string;
-    status: string;
-    outputUrl?: string;
-    error?: string;
-  }>;
-  mergedOutputUrl?: string;
-}
-
-interface Gen4ReferenceImage {
-  id: string;
-  file: File;
-  preview: string;
-  tags: string[];
-}
-
-interface Gen4Generation {
-  id: string;
-  prompt: string;
-  referenceImages: Gen4ReferenceImage[];
-  settings: {
-    aspectRatio: string;
-    resolution: string;
-    seed?: number;
-  };
-  status: "idle" | "processing" | "completed" | "failed";
-  outputUrl?: string;
-  error?: string;
-  timestamp: number;
-}
+import { dbManager } from "@/lib/indexeddb";
+import { convertToBase64 } from "@/lib/utils";
+import {
+  ImageData,
+  Template,
+  JobStatus,
+  Gen4ReferenceImage,
+  Gen4Generation,
+} from "@/types";
 
 export default function VideoGeneratorApp() {
   // State management
@@ -143,6 +83,7 @@ export default function VideoGeneratorApp() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [fullscreenVideo, setFullscreenVideo] = useState<string | null>(null);
+  const [filteredImages, setFilteredImages] = useState<ImageData[]>([]);
   const [carouselIndex, setCarouselIndex] = useState<{ [key: string]: number }>(
     {}
   );
@@ -154,6 +95,8 @@ export default function VideoGeneratorApp() {
       outputUrl?: string;
     }[]
   >([]);
+
+  console.log("images",images)
 
   // Gen 4 specific state
   const [gen4ReferenceImages, setGen4ReferenceImages] = useState<
@@ -236,10 +179,11 @@ export default function VideoGeneratorApp() {
   // Helper functions
   const loadFromIndexedDB = async () => {
     try {
-      // Simple fallback - just return empty array for now
-      // The actual job data will be loaded from the job status API
+      const images = await dbManager.getImages()
+      console.log("images from db", images)
+      setImages(images)
       console.log("Loading from IndexedDB...");
-      return [];
+      return images;
     } catch (error) {
       console.error("Error loading from IndexedDB:", error);
     }
@@ -300,53 +244,65 @@ export default function VideoGeneratorApp() {
     setTemplates(defaultTemplates);
   };
 
-  const handleFileUpload = (files: FileList | null, isGen4 = false) => {
-    if (!files) return;
+  const handleFileUpload = async (files: FileList | null, isGen4 = false) => {
+    try {
+      if (!files) return;
 
-    const newImages: ImageData[] = [];
-    const newGen4Images: Gen4ReferenceImage[] = [];
+      const newImages: ImageData[] = [];
+      const newGen4Images: Gen4ReferenceImage[] = [];
 
-    Array.from(files).forEach((file) => {
-      if (file.type.startsWith("image/")) {
-        const id =
-          Date.now().toString() + Math.random().toString(36).substr(2, 9);
-        const preview = URL.createObjectURL(file);
+      const filesArray = Array.from(files);
 
-        if (isGen4) {
-          newGen4Images.push({
-            id,
-            file,
-            preview,
-            tags: [],
-          });
-        } else {
-          newImages.push({
-            id,
-            file,
-            preview,
-            prompt: "",
-            selected: false,
-            status: "idle",
-          });
+      for await (const file of filesArray) {
+        if (file.type.startsWith("image/")) {
+          const id =
+            Date.now().toString() + Math.random().toString(36).substr(2, 9);
+          const previewData = URL.createObjectURL(file);
+
+          const base64Data = await convertToBase64(file);
+
+          if (isGen4) {
+            newGen4Images.push({
+              id,
+              file,
+              preview: previewData,
+              tags: [],
+            });
+          } else {
+            newImages.push({
+              id,
+              file,
+              fileUrl: "",
+              preview: base64Data,
+              prompt: "",
+              selected: false,
+              status: "idle",
+              mode: mode,
+            });
+            // save uploaded images to indexedDB
+            await dbManager.saveImages(newImages);
+          }
         }
       }
-    });
 
-    if (isGen4) {
-      setGen4ReferenceImages((prev) => [...prev, ...newGen4Images]);
-      if (newGen4Images.length > 0) {
-        setActiveTab("gen4");
+      if (isGen4) {
+        setGen4ReferenceImages((prev) => [...prev, ...newGen4Images]);
+        if (newGen4Images.length > 0) {
+          setActiveTab("gen4");
+          toast({
+            title: "Images added to Gen 4",
+            description: `${newGen4Images.length} image(s) added to Gen 4 references`,
+          });
+        }
+      } else {
+        setImages((prev) => [...prev, ...newImages]);
         toast({
-          title: "Images added to Gen 4",
-          description: `${newGen4Images.length} image(s) added to Gen 4 references`,
+          title: "Images uploaded",
+          description: `${newImages.length} image(s) uploaded successfully`,
         });
       }
-    } else {
-      setImages((prev) => [...prev, ...newImages]);
-      toast({
-        title: "Images uploaded",
-        description: `${newImages.length} image(s) uploaded successfully`,
-      });
+    } catch (error) {
+      console.error("Error uploading images:", error);
     }
   };
 
@@ -359,12 +315,13 @@ export default function VideoGeneratorApp() {
     e.preventDefault();
   };
 
-  const removeImage = (id: string, isGen4 = false) => {
+  const removeImage = async (id: string, isGen4 = false) => {
     if (isGen4) {
       setGen4ReferenceImages((prev) => prev.filter((img) => img.id !== id));
     } else {
       setImages((prev) => prev.filter((img) => img.id !== id));
     }
+    await dbManager.removeImage(id);
   };
 
   const toggleImageSelection = (id: string) => {
@@ -469,6 +426,7 @@ export default function VideoGeneratorApp() {
 
       const metadata = {
         prompts: selectedImages?.map((img) => img.prompt),
+        fileUrls: selectedImages?.map((img) => img.fileUrl).filter((url) => url),
         seedanceModel: settings?.seedance?.model,
         resolution: settings?.seedance?.resolution,
         duration: settings?.seedance?.duration,
@@ -478,7 +436,7 @@ export default function VideoGeneratorApp() {
 
       formData.append("metadata", JSON.stringify(metadata));
 
-      const response = await fetch("/api/generate-videos", {
+      const response = await fetch("/api/generate-media", {
         method: "POST",
         body: formData,
       });
@@ -490,7 +448,37 @@ export default function VideoGeneratorApp() {
       const result = await response.json();
       setGeneratedVideos(result?.generatedResponse);
       // kick off job-status polling so `updateImagesWithResults` will add the outputUrl & videos
-      setJobStatus(result);
+      setJobStatus({ ...result, tasks: result.generatedResponse });
+
+      setImages((prev) =>
+        prev.map((img) =>
+          img.selected ? { ...img, status: "completed" } : img
+        )
+      );
+
+      let i = 0;
+      for await (const image of selectedImages) {
+        // get and overwrite and store in index db
+        const img = await dbManager.getImage(image.id);
+        if (img) {
+          const videos = img.videos || [];
+          if (result.generatedResponse[i].outputUrl) {
+            videos.push(result.generatedResponse[i].outputUrl);
+            await dbManager.saveImage(
+              image.id,
+              image.file,
+              result?.generatedResponse[i]?.fileUrl || "",
+              image.preview,
+              image.prompt,
+              image.selected,
+              image.status,
+              videos,
+              image.mode
+            );
+          }
+        }
+        i++;
+      }
 
       setIsGenerating(false);
 
@@ -503,87 +491,6 @@ export default function VideoGeneratorApp() {
       setIsGenerating(false);
       toast({
         title: "Generation failed",
-        description:
-          error instanceof Error ? error.message : "Unknown error occurred",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const editWithKontext = async (imageId: string, prompt: string) => {
-    const image = images.find((img) => img.id === imageId);
-    if (!image) return;
-
-    try {
-      setImages((prev) =>
-        prev.map((img) =>
-          img.id === imageId ? { ...img, status: "processing" } : img
-        )
-      );
-
-      const formData = new FormData();
-      formData.append("image", image.file);
-      formData.append("prompt", prompt);
-      formData.append("editId", imageId);
-      formData.append("model", settings.kontext.model);
-
-      const response = await fetch("/api/kontext-edit", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
-
-      if (result.success) {
-        setImages((prev) =>
-          prev.map((img) => {
-            if (img.id === imageId) {
-              const editHistory = img.editHistory || [];
-              editHistory.push({
-                id: Date.now().toString(),
-                prompt,
-                imageUrl: result.imageUrl,
-                timestamp: Date.now(),
-                model: settings.kontext.model,
-              });
-              return {
-                ...img,
-                status: "completed",
-                outputUrl: result.imageUrl,
-                editHistory,
-              };
-            }
-            return img;
-          })
-        );
-
-        toast({
-          title: "Edit completed",
-          description: "Image edited successfully with Kontext",
-        });
-      } else {
-        throw new Error(result.error);
-      }
-    } catch (error) {
-      console.error("Kontext edit error:", error);
-      setImages((prev) =>
-        prev.map((img) =>
-          img.id === imageId
-            ? {
-                ...img,
-                status: "failed",
-                error: error instanceof Error ? error.message : "Edit failed",
-              }
-            : img
-        )
-      );
-
-      toast({
-        title: "Edit failed",
         description:
           error instanceof Error ? error.message : "Unknown error occurred",
         variant: "destructive",
@@ -723,32 +630,36 @@ export default function VideoGeneratorApp() {
   };
 
   // Filter and sort images
-  const filteredImages = images
-    .filter((img) => {
-      if (showOnlySelected && !img.selected) return false;
-      if (
-        searchQuery &&
-        !img.file.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
-        !img.prompt.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-        return false;
-      return true;
-    })
-    .sort((a, b) => {
-      let comparison = 0;
-      switch (sortBy) {
-        case "name":
-          comparison = a.file.name.localeCompare(b.file.name);
-          break;
-        case "date":
-          comparison = a.id.localeCompare(b.id);
-          break;
-        case "status":
-          comparison = a.status.localeCompare(b.status);
-          break;
-      }
-      return sortOrder === "asc" ? comparison : -comparison;
-    });
+  const filteredImagesData = useCallback(
+    () =>
+      images
+        .filter((img) => {
+          if (showOnlySelected && !img.selected) return false;
+          if (
+            searchQuery &&
+            !img.file.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+            !img.prompt.toLowerCase().includes(searchQuery.toLowerCase())
+          )
+            return false;
+          return true;
+        })
+        .sort((a, b) => {
+          let comparison = 0;
+          switch (sortBy) {
+            case "name":
+              comparison = a.file.name.localeCompare(b.file.name);
+              break;
+            case "date":
+              comparison = a.id.localeCompare(b.id);
+              break;
+            case "status":
+              comparison = a.status.localeCompare(b.status);
+              break;
+          }
+          return sortOrder === "asc" ? comparison : -comparison;
+        }),
+    [images, showOnlySelected, searchQuery, sortBy, sortOrder]
+  );
 
   const selectedCount = images.filter((img) => img.selected).length;
   const gen4ImageCount = gen4ReferenceImages.length;
@@ -795,8 +706,6 @@ export default function VideoGeneratorApp() {
   };
 
   const openFullscreenImage = (src: string, mode: string) => {
-    console.log("src", src, mode);
-
     if (mode === "seedance") {
       setFullscreenVideo(src);
     } else {
@@ -810,9 +719,13 @@ export default function VideoGeneratorApp() {
     setFullscreenVideo(null);
   };
 
+  useEffect(() => {
+    setFilteredImages(filteredImagesData);
+  }, [filteredImagesData]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
-      <div className="container mx-auto p-6">
+      <div className="container 2xl:max-w-[1825px] mx-auto p-6">
         <div className="mb-8">
           <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
             Seedance Video Generator
@@ -853,509 +766,522 @@ export default function VideoGeneratorApp() {
           </TabsList>
 
           {/* Workspace Tab */}
-          <TabsContent value="workspace" className="space-y-6">
-            {/* Mode Selection */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Wand2 className="w-5 h-5" />
-                  Mode Selection
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex gap-4">
-                  <Button
-                    variant={mode === "seedance" ? "default" : "outline"}
-                    onClick={() => setMode("seedance")}
-                    className="flex items-center gap-2"
-                  >
-                    <Video className="w-4 h-4" />
-                    Seedance (Video)
-                  </Button>
-                  <Button
-                    variant={mode === "kontext" ? "default" : "outline"}
-                    onClick={() => setMode("kontext")}
-                    className="flex items-center gap-2"
-                  >
-                    <ImageIcon className="w-4 h-4" />
-                    Kontext (Edit)
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Upload Area */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Upload className="w-5 h-5" />
-                  Upload Images
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div
-                  className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg p-8 text-center hover:border-purple-400 transition-colors cursor-pointer"
-                  onDrop={handleDrop}
-                  onDragOver={handleDragOver}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Upload className="w-12 h-12 mx-auto mb-4 text-slate-400" />
-                  <p className="text-lg font-medium mb-2">
-                    Drop images here or click to upload
-                  </p>
-                  <p className="text-slate-500">
-                    Support for JPG, PNG, WebP formats
-                  </p>
-                </div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => handleFileUpload(e.target.files)}
-                />
-              </CardContent>
-            </Card>
-
-            {/* Templates and Bulk Actions */}
-            {images.length > 0 && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Star className="w-5 h-5" />
-                      Templates
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <Select
-                      value={selectedTemplate}
-                      onValueChange={setSelectedTemplate}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Choose a template" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {templates.map((template) => (
-                          <SelectItem key={template.id} value={template.id}>
-                            <div className="flex items-center justify-between w-full">
-                              <span>{template.name}</span>
-                              <Badge variant="outline" className="ml-2">
-                                {template.category}
-                              </Badge>
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      onClick={applyTemplateToSelected}
-                      disabled={!selectedTemplate || selectedCount === 0}
-                      className="w-full"
-                    >
-                      Apply to Selected ({selectedCount})
-                    </Button>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Layers className="w-5 h-5" />
-                      Bulk Actions
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <Textarea
-                      placeholder="Enter prompt for all selected images..."
-                      value={bulkPrompt}
-                      onChange={(e) => setBulkPrompt(e.target.value)}
-                      rows={3}
-                    />
-                    <div className="flex gap-2">
-                      <Button
-                        onClick={applyBulkPrompt}
-                        disabled={!bulkPrompt.trim() || selectedCount === 0}
-                        className="flex-1"
-                      >
-                        Apply Bulk Prompt
-                      </Button>
-                      <Button
-                        onClick={sendToGen4}
-                        disabled={selectedCount === 0}
-                        variant="outline"
-                        className="flex items-center gap-2 bg-transparent"
-                      >
-                        <Send className="w-4 h-4" />
-                        Send to Gen 4
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            )}
-
-            {/* Image Management */}
-            {images.length > 0 && (
+          <TabsContent value="workspace" className="space-y-6" forceMount>
+            <div className={`space-y-6 ${activeTab === "workspace" ? "" : "hidden"}`}>
+              {/* Mode Selection */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <ImageIcon className="w-5 h-5" />
-                      Images ({images.length})
-                    </div>
-                    <div className="flex items-center gap-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <Wand2 className="w-5 h-5" />
+                    Mode Selection
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-4">
+                    <Button
+                      variant={mode === "seedance" ? "default" : "outline"}
+                      onClick={() => setMode("seedance")}
+                      className="flex items-center gap-2"
+                    >
+                      <Video className="w-4 h-4" />
+                      Seedance (Video)
+                    </Button>
+                    <Button
+                      variant={mode === "kontext" ? "default" : "outline"}
+                      onClick={() => setMode("kontext")}
+                      className="flex items-center gap-2"
+                    >
+                      <ImageIcon className="w-4 h-4" />
+                      Kontext (Edit)
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Upload Area */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Upload className="w-5 h-5" />
+                    Upload Images
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div
+                    className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg p-8 text-center hover:border-purple-400 transition-colors cursor-pointer"
+                    onDrop={handleDrop}
+                    onDragOver={handleDragOver}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload className="w-12 h-12 mx-auto mb-4 text-slate-400" />
+                    <p className="text-lg font-medium mb-2">
+                      Drop images here or click to upload
+                    </p>
+                    <p className="text-slate-500">
+                      Support for JPG, PNG, WebP formats
+                    </p>
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => handleFileUpload(e.target.files)}
+                  />
+                </CardContent>
+              </Card>
+
+              {/* Templates and Bulk Actions */}
+              {images.length > 0 && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Star className="w-5 h-5" />
+                        Templates
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <Select
+                        value={selectedTemplate}
+                        onValueChange={setSelectedTemplate}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Choose a template" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {templates.map((template) => (
+                            <SelectItem key={template.id} value={template.id}>
+                              <div className="flex items-center justify-between w-full">
+                                <span>{template.name}</span>
+                                <Badge variant="outline" className="ml-2">
+                                  {template.category}
+                                </Badge>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        onClick={applyTemplateToSelected}
+                        disabled={!selectedTemplate || selectedCount === 0}
+                        className="w-full"
+                      >
+                        Apply to Selected ({selectedCount})
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Layers className="w-5 h-5" />
+                        Bulk Actions
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <Textarea
+                        placeholder="Enter prompt for all selected images..."
+                        value={bulkPrompt}
+                        onChange={(e) => setBulkPrompt(e.target.value)}
+                        rows={3}
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={applyBulkPrompt}
+                          disabled={!bulkPrompt.trim() || selectedCount === 0}
+                          className="flex-1"
+                        >
+                          Apply Bulk Prompt
+                        </Button>
+                        <Button
+                          onClick={sendToGen4}
+                          disabled={selectedCount === 0}
+                          variant="outline"
+                          className="flex items-center gap-2 bg-transparent"
+                        >
+                          <Send className="w-4 h-4" />
+                          Send to Gen 4
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+
+              {/* Image Management */}
+              {images.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Input
-                          placeholder="Search images..."
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          className="w-48"
-                        />
+                        <ImageIcon className="w-5 h-5" />
+                        Images ({images.length})
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2">
+                          <Input
+                            placeholder="Search images..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-48"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setViewMode(viewMode === "grid" ? "list" : "grid")
+                            }
+                          >
+                            {viewMode === "grid" ? (
+                              <List className="w-4 h-4" />
+                            ) : (
+                              <Grid className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-4">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={selectAllImages}
+                        >
+                          {images.every((img) => img.selected)
+                            ? "Deselect All"
+                            : "Select All"}
+                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="show-selected"
+                            checked={showOnlySelected}
+                            // onCheckedChange={setShowOnlySelected}
+                          />
+                          <Label htmlFor="show-selected">
+                            Show only selected
+                          </Label>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Select
+                          value={sortBy}
+                          onValueChange={(value: any) => setSortBy(value)}
+                        >
+                          <SelectTrigger className="w-32">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="name">Name</SelectItem>
+                            <SelectItem value="date">Date</SelectItem>
+                            <SelectItem value="status">Status</SelectItem>
+                          </SelectContent>
+                        </Select>
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() =>
-                            setViewMode(viewMode === "grid" ? "list" : "grid")
+                            setSortOrder(sortOrder === "asc" ? "desc" : "asc")
                           }
                         >
-                          {viewMode === "grid" ? (
-                            <List className="w-4 h-4" />
+                          {sortOrder === "asc" ? (
+                            <SortAsc className="w-4 h-4" />
                           ) : (
-                            <Grid className="w-4 h-4" />
+                            <SortDesc className="w-4 h-4" />
                           )}
                         </Button>
                       </div>
                     </div>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-4">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={selectAllImages}
-                      >
-                        {images.every((img) => img.selected)
-                          ? "Deselect All"
-                          : "Select All"}
-                      </Button>
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          id="show-selected"
-                          checked={showOnlySelected}
-                          // onCheckedChange={setShowOnlySelected}
-                        />
-                        <Label htmlFor="show-selected">
-                          Show only selected
-                        </Label>
-                      </div>
+
+                    <div
+                      className={
+                        viewMode === "grid"
+                          ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4"
+                          : "space-y-4"
+                      }
+                    >
+                      {filteredImages.filter((image) => image.mode === mode).map((image, index) => {
+                        const videos =
+                          image.videos && image.videos.length > 0
+                            ? image.videos
+                            : image.outputUrl
+                            ? [image.outputUrl]
+                            : [];
+                        const currentIdx = carouselIndex[image.id] ?? 0;
+                        const mediaUrl =
+                          videos[currentIdx] ??
+                          generatedVideos.find(
+                            (vid) => vid?.filename === image?.file?.name
+                          )?.outputUrl;
+                        return (
+                          <div
+                            key={image.id}
+                            className={`m-1 relative group border rounded-lg overflow-hidden ${
+                              image.selected ? "ring-2 ring-purple-500" : ""
+                            } ${
+                              viewMode === "list"
+                                ? "flex items-center gap-4 p-4"
+                                : ""
+                            }`}
+                          >
+                            <div
+                              className={`relative ${
+                                viewMode === "list"
+                                  ? "w-20 h-20 flex-shrink-0"
+                                  : "aspect-square"
+                              }`}
+                            >
+                              <img
+                                src={
+                                  `data:image/png;base64,${image.preview}` ||
+                                  "/placeholder.svg"
+                                }
+                                alt={image?.file?.name}
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() =>
+                                      toggleImageSelection(image.id)
+                                    }
+                                  >
+                                    {image.selected ? (
+                                      <Check className="w-4 h-4" />
+                                    ) : (
+                                      <Plus className="w-4 h-4" />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => removeImage(image.id)}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() =>
+                                      openFullscreenImage(
+                                        image.preview || "/placeholder.svg",
+                                        "kontext"
+                                      )
+                                    }
+                                  >
+                                    <Search className="w-4 h-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                              {image.status !== "idle" && (
+                                <div className="absolute top-2 right-2">
+                                  <Badge
+                                    variant={
+                                      image.status === "completed"
+                                        ? "default"
+                                        : image.status === "processing"
+                                        ? "secondary"
+                                        : image.status === "failed"
+                                        ? "destructive"
+                                        : "outline"
+                                    }
+                                  >
+                                    {image.status}
+                                  </Badge>
+                                </div>
+                              )}
+                            </div>
+
+                            <div
+                              className={`${
+                                viewMode === "list" ? "flex-1" : "pt-3"
+                              }`}
+                            >
+                              <div className="px-3 mb-3">
+                                <p className="font-medium text-sm truncate mb-2">
+                                  {image?.file?.name}
+                                </p>
+                                <Textarea
+                                  placeholder={
+                                    mode === "seedance"
+                                      ? "Enter video prompt..."
+                                      : "Enter edit prompt..."
+                                  }
+                                  value={image.prompt}
+                                  onChange={(e) =>
+                                    setImages((prev) =>
+                                      prev.map((img) =>
+                                        img.id === image.id
+                                          ? { ...img, prompt: e.target.value }
+                                          : img
+                                      )
+                                    )
+                                  }
+                                  rows={2}
+                                  className="text-sm"
+                                />
+                              </div>
+                              {mode === "kontext" && image.prompt && (
+                                <Button
+                                  size="sm"
+                                  onClick={startGeneration}
+                                  disabled={image.status === "processing"}
+                                  className="mt-2 w-full"
+                                >
+                                  {image.status === "processing"
+                                    ? "Editing..."
+                                    : "Edit with Kontext"}
+                                </Button>
+                              )}
+                              {mediaUrl && (
+                                <div className="mt-2 relative overflow-hidden rounded-es-lg rounded-ee-lg border bg-white group z-[10]">
+                                  {mode === "seedance" ? (
+                                    <video
+                                      src={mediaUrl}
+                                      controls
+                                      className="w-full h-[180px] relative z-[10]"
+                                    />
+                                  ) : (
+                                    <img
+                                      src={mediaUrl}
+                                      alt="Edited"
+                                      className="w-full rounded"
+                                    />
+                                  )}
+                                  {videos.length > 1 && (
+                                    <div className="absolute flex items-center justify-between px-2 top-0 right-0 bottom-0 left-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button
+                                        className="bg-black/50 text-white rounded-full flex items-center justify-center w-[24px] h-[24px] z-[999]"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setCarouselIndex((prev) => ({
+                                            ...prev,
+                                            [image.id]:
+                                              (currentIdx - 1 + videos.length) %
+                                              videos.length,
+                                          }));
+                                        }}
+                                      >
+                                        ‹
+                                      </button>
+                                      <button
+                                        className="bg-black/50 text-white rounded-full w-[24px] h-[24px] flex items-center justify-center z-[999]"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setCarouselIndex((prev) => ({
+                                            ...prev,
+                                            [image.id]:
+                                              (currentIdx + 1) % videos.length,
+                                          }));
+                                        }}
+                                      >
+                                        ›
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  <div className="absolute top-2 right-2 opacity-0 bg-black/0 group-hover:bg-black/20 group-hover:opacity-100 transition-opacity">
+                                    <div className="flex gap-1">
+                                      <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        className="h-8 w-8 p-0"
+                                        onClick={() =>
+                                          openFullscreenImage(
+                                            mediaUrl || "/placeholder.svg",
+                                            mode === "seedance"
+                                              ? "seedance"
+                                              : "kontext"
+                                          )
+                                        }
+                                      >
+                                        <Search className="w-3 h-3" />
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {image.error && (
+                                <p className="text-red-500 text-xs mt-2">
+                                  {image.error}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Select
-                        value={sortBy}
-                        onValueChange={(value: any) => setSortBy(value)}
-                      >
-                        <SelectTrigger className="w-32">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="name">Name</SelectItem>
-                          <SelectItem value="date">Date</SelectItem>
-                          <SelectItem value="status">Status</SelectItem>
-                        </SelectContent>
-                      </Select>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Generation Controls */}
+              {mode === "seedance" && images.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Play className="w-5 h-5" />
+                      Generate Videos
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <p className="text-sm text-slate-600">
+                          {selectedCount} image(s) selected for generation
+                        </p>
+                        {jobStatus && (
+                          <div className="flex items-center gap-2">
+                            <Progress
+                              value={
+                                (jobStatus.completed / jobStatus.total) * 100
+                              }
+                              className="w-32"
+                            />
+                            <span className="text-sm">
+                              {jobStatus.completed}/{jobStatus.total}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                       <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          setSortOrder(sortOrder === "asc" ? "desc" : "asc")
-                        }
+                        onClick={startGeneration}
+                        disabled={isGenerating || selectedCount === 0}
+                        className="flex items-center gap-2"
                       >
-                        {sortOrder === "asc" ? (
-                          <SortAsc className="w-4 h-4" />
+                        {isGenerating ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            Generating...
+                          </>
                         ) : (
-                          <SortDesc className="w-4 h-4" />
+                          <>
+                            <Play className="w-4 h-4" />
+                            Generate Videos
+                          </>
                         )}
                       </Button>
                     </div>
-                  </div>
-
-                  <div
-                    className={
-                      viewMode === "grid"
-                        ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
-                        : "space-y-4"
-                    }
-                  >
-                    {filteredImages.map((image, index) => {
-                      const videos =
-                        image.videos && image.videos.length > 0
-                          ? image.videos
-                          : image.outputUrl
-                          ? [image.outputUrl]
-                          : [];
-                      const currentIdx = carouselIndex[image.id] ?? 0;
-                      const mediaUrl =
-                        videos[currentIdx] ??
-                        generatedVideos.find(
-                          (vid) => vid?.filename === image?.file?.name
-                        )?.outputUrl;
-                      return (
-                        <div
-                          key={image.id}
-                          className={`m-1 relative group border rounded-lg overflow-hidden ${
-                            image.selected ? "ring-2 ring-purple-500" : ""
-                          } ${
-                            viewMode === "list"
-                              ? "flex items-center gap-4 p-4"
-                              : ""
-                          }`}
-                        >
-                          <div
-                            className={`relative ${
-                              viewMode === "list"
-                                ? "w-20 h-20 flex-shrink-0"
-                                : "aspect-square"
-                            }`}
-                          >
-                            <img
-                              src={image.preview || "/placeholder.svg"}
-                              alt={image.file.name}
-                              className="w-full h-full object-cover"
-                            />
-                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                              <div className="flex gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  onClick={() => toggleImageSelection(image.id)}
-                                >
-                                  {image.selected ? (
-                                    <Check className="w-4 h-4" />
-                                  ) : (
-                                    <Plus className="w-4 h-4" />
-                                  )}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => removeImage(image.id)}
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  onClick={() =>
-                                    openFullscreenImage(
-                                      image.preview || "/placeholder.svg",
-                                      "kontext"
-                                    )
-                                  }
-                                >
-                                  <Search className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </div>
-                            {image.status !== "idle" && (
-                              <div className="absolute top-2 right-2">
-                                <Badge
-                                  variant={
-                                    image.status === "completed"
-                                      ? "default"
-                                      : image.status === "processing"
-                                      ? "secondary"
-                                      : image.status === "failed"
-                                      ? "destructive"
-                                      : "outline"
-                                  }
-                                >
-                                  {image.status}
-                                </Badge>
-                              </div>
-                            )}
-                          </div>
-
-                          <div
-                            className={`${
-                              viewMode === "list" ? "flex-1" : "p-3"
-                            }`}
-                          >
-                            <p className="font-medium text-sm truncate mb-2">
-                              {image.file.name}
-                            </p>
-                            <Textarea
-                              placeholder={
-                                mode === "seedance"
-                                  ? "Enter video prompt..."
-                                  : "Enter edit prompt..."
-                              }
-                              value={image.prompt}
-                              onChange={(e) =>
-                                setImages((prev) =>
-                                  prev.map((img) =>
-                                    img.id === image.id
-                                      ? { ...img, prompt: e.target.value }
-                                      : img
-                                  )
-                                )
-                              }
-                              rows={2}
-                              className="text-sm"
-                            />
-                            {mode === "kontext" && image.prompt && (
-                              <Button
-                                size="sm"
-                                onClick={startGeneration}
-                                disabled={image.status === "processing"}
-                                className="mt-2 w-full"
-                              >
-                                {image.status === "processing"
-                                  ? "Editing..."
-                                  : "Edit with Kontext"}
-                              </Button>
-                            )}
-                            {mediaUrl && (
-                              <div className="mt-2 relative overflow-hidden rounded-lg border bg-white group">
-                                {mode === "seedance" ? (
-                                  <video
-                                    src={mediaUrl}
-                                    controls
-                                    className="w-full rounded"
-                                  />
-                                ) : (
-                                  <img
-                                    src={mediaUrl}
-                                    alt="Edited"
-                                    className="w-full rounded"
-                                  />
-                                )}
-                                {videos.length > 1 && (
-                                  <div className="absolute inset-0 flex items-center justify-between px-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button
-                                      className="bg-black/50 text-white rounded-full w-6 h-6 flex items-center justify-center"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setCarouselIndex((prev) => ({
-                                          ...prev,
-                                          [image.id]:
-                                            (currentIdx - 1 + videos.length) %
-                                            videos.length,
-                                        }));
-                                      }}
-                                    >
-                                      ‹
-                                    </button>
-                                    <button
-                                      className="bg-black/50 text-white rounded-full w-6 h-6 flex items-center justify-center"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setCarouselIndex((prev) => ({
-                                          ...prev,
-                                          [image.id]:
-                                            (currentIdx + 1) % videos.length,
-                                        }));
-                                      }}
-                                    >
-                                      ›
-                                    </button>
-                                  </div>
-                                )}
-
-                                <div className="absolute top-2 right-2 opacity-0 bg-black/0 group-hover:bg-black/20 group-hover:opacity-100 transition-opacity">
-                                  <div className="flex gap-1">
-                                    <Button
-                                      size="sm"
-                                      variant="secondary"
-                                      className="h-8 w-8 p-0"
-                                      onClick={() =>
-                                        openFullscreenImage(
-                                          mediaUrl || "/placeholder.svg",
-                                          mode === "seedance"
-                                            ? "seedance"
-                                            : "kontext"
-                                        )
-                                      }
-                                    >
-                                      <Search className="w-3 h-3" />
-                                    </Button>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
-                            {image.error && (
-                              <p className="text-red-500 text-xs mt-2">
-                                {image.error}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Generation Controls */}
-            {mode === "seedance" && images.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Play className="w-5 h-5" />
-                    Generate Videos
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <p className="text-sm text-slate-600">
-                        {selectedCount} image(s) selected for generation
-                      </p>
-                      {jobStatus && (
-                        <div className="flex items-center gap-2">
-                          <Progress
-                            value={
-                              (jobStatus.completed / jobStatus.total) * 100
-                            }
-                            className="w-32"
-                          />
-                          <span className="text-sm">
-                            {jobStatus.completed}/{jobStatus.total}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                    <Button
-                      onClick={startGeneration}
-                      disabled={isGenerating || selectedCount === 0}
-                      className="flex items-center gap-2"
-                    >
-                      {isGenerating ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          Generating...
-                        </>
-                      ) : (
-                        <>
-                          <Play className="w-4 h-4" />
-                          Generate Videos
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           </TabsContent>
 
           {/* Gen 4 Tab */}
-          <TabsContent value="gen4" className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <TabsContent value="gen4" className="space-y-6" forceMount>
+            <div
+              className={`grid grid-cols-1 lg:grid-cols-3 gap-6 ${
+                activeTab === "gen4" ? "" : "hidden"
+              }`}
+            >
               <div className="col-span-2">
                 <Card>
                   <CardHeader>
@@ -1733,8 +1659,12 @@ export default function VideoGeneratorApp() {
           </TabsContent>
 
           {/* Settings Tab */}
-          <TabsContent value="settings" className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <TabsContent value="settings" className="space-y-6" forceMount>
+            <div
+              className={`grid grid-cols-1 lg:grid-cols-2 gap-6 ${
+                activeTab === "settings" ? "" : "hidden"
+              }`}
+            >
               {/* Seedance Settings */}
               <Card>
                 <CardHeader>

@@ -14,45 +14,64 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const metadata = JSON.parse(metadataStr);
-    const { prompts, resolution, duration, camera_fixed, mode, seedanceModel } = metadata;
+    const metadata: {
+      fileUrls: string[];
+      prompts: string[];
+      resolution: string;
+      duration: number;
+      camera_fixed: boolean;
+      mode: "seedance" | "kontext";
+      seedanceModel: string;
+    } = JSON.parse(metadataStr);
+    const { prompts, resolution, duration, camera_fixed, mode, seedanceModel, fileUrls } = metadata;
 
-    // Upload images to Replicate and store their filenames
-    const imagesUrlsAndNames = await Promise.all(
-      images.map(async (image) => {
-        const imageBuffer = await image.arrayBuffer();
-        const imageBlob = new Blob([imageBuffer], { type: image.type });
-        const uploadFormData = new FormData();
-        uploadFormData.append("filename", image.name);
-        uploadFormData.append("content", imageBlob);
+    console.log("fileUrls", fileUrls)
 
-        const uploadResponse = await fetch(
-          "https://api.replicate.com/v1/files",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Token ${apiToken}`,
-            },
-            body: uploadFormData,
+    let imagesUrlsAndNames = [];
+    if (fileUrls && Array.isArray(fileUrls) && fileUrls.length > 0) {
+      imagesUrlsAndNames = images.map((image, index) => ({
+        filename: image.name,
+        servingUrl: fileUrls[index],
+      }));
+    } else {
+      // Upload images to Replicate and store their filenames
+      imagesUrlsAndNames = await Promise.all(
+        images.map(async (image) => {
+          const imageBuffer = await image.arrayBuffer();
+          const imageBlob = new Blob([imageBuffer], { type: image.type });
+          const uploadFormData = new FormData();
+          uploadFormData.append("filename", image.name);
+          uploadFormData.append("content", imageBlob);
+  
+          const uploadResponse = await fetch(
+            "https://api.replicate.com/v1/files",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Token ${apiToken}`,
+              },
+              body: uploadFormData,
+            }
+          );
+  
+          if (!uploadResponse.ok) {
+            const errorText = await uploadResponse.text();
+            console.error(
+              `🔴 Image Upload Failed: Status ${uploadResponse.status}`,
+              errorText
+            );
+            throw new Error(
+              `Image upload failed for ${image.name}: ${uploadResponse.status} - ${errorText}`
+            );
           }
-        );
+  
+          const uploadResult = await uploadResponse.json();
+          const servingUrl = uploadResult.urls.get as string;
+          return { servingUrl, filename: image.name };
+        })
+      );
+    }
 
-        if (!uploadResponse.ok) {
-          const errorText = await uploadResponse.text();
-          console.error(
-            `🔴 Image Upload Failed: Status ${uploadResponse.status}`,
-            errorText
-          );
-          throw new Error(
-            `Image upload failed for ${image.name}: ${uploadResponse.status} - ${errorText}`
-          );
-        }
-
-        const uploadResult = await uploadResponse.json();
-        const servingUrl = uploadResult.urls.get;
-        return { servingUrl, filename: image.name };
-      })
-    );
 
     console.log("Uploaded images:", imagesUrlsAndNames);
 
@@ -80,6 +99,8 @@ export async function POST(request: NextRequest) {
             }),
           };
 
+    console.log("Generated model:", model);
+    console.log("Generated settings:", settings);
     const generatedResponse = await Promise.all(
       imagesUrlsAndNames.map(async ({ servingUrl, filename }, index) => {
         try {
@@ -117,6 +138,7 @@ export async function POST(request: NextRequest) {
 
           return {
             filename,
+            fileUrl: servingUrl,
             prompt: prompts[index],
             status: "completed",
             outputUrl: url,
@@ -125,6 +147,7 @@ export async function POST(request: NextRequest) {
           console.error(`🔴 Unexpected error for ${filename}:`, error);
           return {
             filename,
+            fileUrl: servingUrl,
             prompt: prompts[index],
             status: "failed",
             error: error.message || "An unexpected error occurred.",
