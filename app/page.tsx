@@ -18,41 +18,25 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "@/hooks/use-toast";
 import {
-  Upload,
   Play,
-  Download,
   Trash2,
   Settings,
   ImageIcon,
-  Video,
   Sparkles,
   Check,
   X,
   Plus,
-  DollarSign,
   Layers,
   Grid,
   List,
   SortAsc,
   SortDesc,
-  Tag,
-  Clock,
-  Copy,
-  CheckCircle2,
   Search,
 } from "lucide-react";
-import {
-  GEN4_RESOLUTIONS,
-  SEEDANCE_DURATIONS,
-  SEEDANCE_LITE_RESOLUTIONS,
-  SEEDANCE_MODELS,
-  SEEDANCE_PRO_RESOLUTIONS,
-} from "@/static/data";
+import { defaultSettings, defaultTemplates } from "@/static/data";
 import { dbManager } from "@/lib/indexeddb";
 import { copyToClipboard, downloadFile, handleDragOver } from "@/lib/helpers";
 import { convertToBase64 } from "@/lib/utils";
@@ -63,11 +47,13 @@ import {
   Gen4ReferenceImage,
   Gen4Generation,
 } from "@/types";
-
+import { useLoading } from "@/hooks/use-form-submit";
 import ModeSelection from "@/app/views/ModeSelection";
 import UploadArea from "@/app/views/UploadArea";
 import TemplatesPanel from "@/app/views/TemplatesPanel";
 import BulkActionsPanel from "@/app/views/BulkActionsPanel";
+import Gen4 from "@/app/views/tab/Gen4";
+import Setting from "./views/tab/Setting";
 
 export default function VideoGeneratorApp() {
   // State management
@@ -77,7 +63,6 @@ export default function VideoGeneratorApp() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const [bulkPrompt, setBulkPrompt] = useState("");
-  const [isGenerating, setIsGenerating] = useState(false);
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [showOnlySelected, setShowOnlySelected] = useState(false);
@@ -110,25 +95,9 @@ export default function VideoGeneratorApp() {
     seed: undefined as number | undefined,
   });
   const [gen4Generations, setGen4Generations] = useState<Gen4Generation[]>([]);
-  const [isGen4Generating, setIsGen4Generating] = useState(false);
 
   // Settings state
-  const [settings, setSettings] = useState({
-    seedance: {
-      model: "seedance-1-lite",
-      resolution: "480p",
-      duration: 5,
-      cameraFixed: false,
-    },
-    kontext: {
-      model: "dev" as "dev" | "max",
-    },
-    general: {
-      autoSave: true,
-      showCostEstimates: true,
-      maxConcurrentJobs: 3,
-    },
-  });
+  const [settings, setSettings] = useState(defaultSettings);
 
   // Refs
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -163,7 +132,6 @@ export default function VideoGeneratorApp() {
               updatedStatus.status === "failed"
             ) {
               updateImagesWithResults(updatedStatus);
-              setIsGenerating(false);
             }
           }
         } catch (error) {
@@ -180,8 +148,8 @@ export default function VideoGeneratorApp() {
   // Helper functions
   const loadFromIndexedDB = async () => {
     try {
-      const images = await dbManager.getImages()
-      setImages(images)
+      const images = await dbManager.getImages();
+      setImages(images);
       return images;
     } catch (error) {
       console.error("Error loading from IndexedDB:", error);
@@ -198,48 +166,6 @@ export default function VideoGeneratorApp() {
   };
 
   const loadTemplates = () => {
-    const defaultTemplates: Template[] = [
-      {
-        id: "1",
-        name: "Cinematic",
-        prompt: "cinematic shot, dramatic lighting, film grain",
-        category: "Style",
-        favorite: false,
-        usageCount: 0,
-      },
-      {
-        id: "2",
-        name: "Nature",
-        prompt: "beautiful nature scene, vibrant colors, peaceful atmosphere",
-        category: "Scene",
-        favorite: false,
-        usageCount: 0,
-      },
-      {
-        id: "3",
-        name: "Urban",
-        prompt: "modern city, bustling streets, urban architecture",
-        category: "Scene",
-        favorite: false,
-        usageCount: 0,
-      },
-      {
-        id: "4",
-        name: "Portrait",
-        prompt: "professional portrait, soft lighting, shallow depth of field",
-        category: "Style",
-        favorite: false,
-        usageCount: 0,
-      },
-      {
-        id: "5",
-        name: "Abstract",
-        prompt: "abstract art, flowing shapes, vibrant colors",
-        category: "Art",
-        favorite: false,
-        usageCount: 0,
-      },
-    ];
     setTemplates(defaultTemplates);
   };
 
@@ -393,12 +319,53 @@ export default function VideoGeneratorApp() {
     );
   };
 
-  const startGeneration = async () => {
-    const selectedImages = images.filter(
+  const uploadFile = async (fileOrUrl: File | string) => {
+    // If fileOrUrl is already a URL string, just return it
+    if (typeof fileOrUrl === "string") {
+      return fileOrUrl;
+    }
+
+    // Otherwise, it's a File object that needs to be uploaded
+    const formData = new FormData();
+    formData.append("media", fileOrUrl);
+    try {
+      const response = await fetch("/api/upload-media", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.error || `File upload failed: ${response.statusText}`
+        );
+      }
+      const result = await response.json();
+      if (!result.urls || !result.urls.get) {
+        throw new Error("Invalid response from upload API");
+      }
+      return result.urls.get as string;
+    } catch (error) {
+      console.error("Upload error:", error);
+      toast({
+        title: "Upload Failed",
+        description:
+          error instanceof Error ? error.message : "An unknown error occurred",
+        variant: "destructive",
+      });
+      throw error;
+    }
+  };
+
+  const startGeneration = async (
+    mode: "seedance" | "kontext",
+    images: ImageData[]
+  ) => {
+    const modeImages = images.filter((img) => img?.mode === mode);
+    const selectedImages = modeImages.filter(
       (img) => img?.selected && img?.prompt?.trim()
     );
 
-    if (selectedImages?.length === 0) {
+    if (selectedImages.length === 0) {
       toast({
         title: "No images selected",
         description: "Please select images with prompts to generate videos",
@@ -407,33 +374,57 @@ export default function VideoGeneratorApp() {
       return;
     }
 
-    setIsGenerating(true);
+    // Mark selected images as processing
     setImages((prev) =>
-      prev.map((img) => (img.selected ? { ...img, status: "processing" } : img))
+      prev.map((img) =>
+        img.selected && img.mode === mode
+          ? { ...img, status: "processing" }
+          : img
+      )
     );
 
     try {
-      const formData = new FormData();
+      const fileUrls = await Promise.all(
+        selectedImages.map(async (img) => {
+          if (img.file) {
+            return uploadFile(img.file);
+          }
 
-      selectedImages.forEach((img) => {
-        formData.append("images", img.file);
-      });
+          const dbImg = await dbManager.getImage(img.id);
+          if (dbImg?.fileUrl) return dbImg.fileUrl;
 
-      const metadata = {
-        prompts: selectedImages?.map((img) => img.prompt),
-        fileUrls: selectedImages?.map((img) => img.fileUrl).filter((url) => url),
+          if (dbImg?.preview) {
+            try {
+              const blob = await (
+                await fetch(`data:image/png;base64,${dbImg.preview}`)
+              ).blob();
+              const file = new File([blob], `image-${img.id}.png`, {
+                type: "image/png",
+              });
+              return uploadFile(file);
+            } catch (error) {
+              console.error("Error converting base64 to blob:", error);
+            }
+          }
+
+          return "";
+        })
+      );
+
+      const payload = {
+        fileUrls,
+        prompts: selectedImages.map((img) => img.prompt),
         seedanceModel: settings?.seedance?.model,
         resolution: settings?.seedance?.resolution,
         duration: settings?.seedance?.duration,
         camera_fixed: settings?.seedance?.cameraFixed,
-        mode: mode,
+        mode,
       };
-
-      formData.append("metadata", JSON.stringify(metadata));
 
       const response = await fetch("/api/generate-media", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -441,43 +432,56 @@ export default function VideoGeneratorApp() {
       }
 
       const result = await response.json();
-      setGeneratedVideos(result?.generatedResponse);
-      // kick off job-status polling so `updateImagesWithResults` will add the outputUrl & videos
-      setJobStatus({ ...result, tasks: result.generatedResponse });
+      const generated = result?.generatedResponse || [];
 
+      setGeneratedVideos(generated);
+      setJobStatus({ ...result, tasks: generated });
+
+      // Mark completed
       setImages((prev) =>
         prev.map((img) =>
-          img.selected ? { ...img, status: "completed" } : img
+          img.selected && img.mode === mode
+            ? { ...img, status: "completed" }
+            : img
         )
       );
 
-      let i = 0;
-      for await (const image of selectedImages) {
-        // get and overwrite and store in index db
-        const img = await dbManager.getImage(image.id);
-        if (img) {
-          const videos = img.videos || [];
-          if (result.generatedResponse[i].outputUrl) {
-            videos.push(result.generatedResponse[i].outputUrl);
-            console.log("videos", videos);
-            await dbManager.saveImage(
-              image.id,
-              { name: img?.filename || image.file?.name, type: image?.file?.type || img?.type || "", size: image?.file?.size || img?.size || 0 },
-              result?.generatedResponse[i]?.fileUrl || "",
-              image.preview,
-              image.prompt,
-              image.selected,
-              image.status,
-              videos,
-              image.mode
-            );
-          }
+      for (let i = 0; i < modeImages.length; i++) {
+        const image = modeImages[i];
+        const dbImage = await dbManager.getImage(image.id);
+        if (!dbImage) continue;
+
+        const newVideoUrl = generated[i]?.outputUrl;
+        const fileUrl = generated[i]?.fileUrl || dbImage.fileUrl || "";
+
+        const existingVideos = Array.isArray(dbImage.videos)
+          ? [...dbImage.videos]
+          : [];
+
+        if (newVideoUrl && !existingVideos.includes(newVideoUrl)) {
+          existingVideos.push(newVideoUrl);
         }
-        i++;
+
+        const updatedImageData = {
+          name: image.file?.name ?? dbImage.filename ?? "Unnamed Image",
+          type: image.file?.type ?? dbImage.type ?? "image/png",
+          size: image.file?.size ?? dbImage.size ?? 0,
+        };
+
+        await dbManager.saveImage(
+          image.id,
+          updatedImageData,
+          fileUrl,
+          image.preview ?? dbImage.preview,
+          image.prompt ?? dbImage.prompt,
+          image.selected ?? dbImage.selected,
+          image.status ?? dbImage.status,
+          existingVideos,
+          image.mode ?? dbImage.mode
+        );
       }
 
       loadFromIndexedDB();
-      setIsGenerating(false);
 
       toast({
         title: "Generation started",
@@ -485,7 +489,6 @@ export default function VideoGeneratorApp() {
       });
     } catch (error) {
       console.error("Generation error:", error);
-      setIsGenerating(false);
       toast({
         title: "Generation failed",
         description:
@@ -494,6 +497,12 @@ export default function VideoGeneratorApp() {
       });
     }
   };
+
+  const { onSubmit: startSeedanceGeneration, processing: seedanceProcessing } =
+    useLoading(() => startGeneration("seedance", images));
+
+  const { onSubmit: startKontextGeneration, processing: kontextProcessing } =
+    useLoading(() => startGeneration("kontext", images));
 
   const sendToGen4 = () => {
     const selectedImages = images.filter((img) => img.selected);
@@ -523,80 +532,81 @@ export default function VideoGeneratorApp() {
     });
   };
 
-  const generateGen4 = async () => {
-    if (!gen4Prompt.trim()) {
-      toast({
-        title: "Missing prompt",
-        description: "Please enter a prompt for Gen 4 generation",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (gen4ReferenceImages.length === 0) {
-      toast({
-        title: "No reference images",
-        description: "Please add at least one reference image",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsGen4Generating(true);
-
-    try {
-      const formData = new FormData();
-      formData.append("prompt", gen4Prompt);
-      formData.append("aspectRatio", gen4Settings.aspectRatio);
-      formData.append("resolution", gen4Settings.resolution);
-      if (gen4Settings.seed) {
-        formData.append("seed", gen4Settings.seed.toString());
+  const { onSubmit: generateGen4, processing: gen4Processing } = useLoading(
+    async () => {
+      if (!gen4Prompt.trim()) {
+        toast({
+          title: "Missing prompt",
+          description: "Please enter a prompt for Gen 4 generation",
+          variant: "destructive",
+        });
+        return;
       }
 
-      gen4ReferenceImages.forEach((img, index) => {
-        formData.append(`referenceImage${index + 1}`, img.file);
-        formData.append(`referenceTags${index + 1}`, JSON.stringify(img.tags));
-      });
-
-      const response = await fetch("/api/gen4", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (gen4ReferenceImages.length === 0) {
+        toast({
+          title: "No reference images",
+          description: "Please add at least one reference image",
+          variant: "destructive",
+        });
+        return;
       }
 
-      const result = await response.json();
+      try {
+        const referenceImages = await Promise.all(
+          gen4ReferenceImages.map((img) => uploadFile(img.file))
+        );
 
-      const newGeneration: Gen4Generation = {
-        id: Date.now().toString(),
-        prompt: gen4Prompt,
-        referenceImages: [...gen4ReferenceImages],
-        settings: { ...gen4Settings },
-        status: "completed",
-        outputUrl: result.imageUrl,
-        timestamp: Date.now(),
-      };
+        const payload = {
+          prompt: gen4Prompt,
+          aspectRatio: gen4Settings.aspectRatio,
+          resolution: gen4Settings.resolution,
+          seed: gen4Settings.seed,
+          referenceImages,
+          referenceTags: gen4ReferenceImages.map((img) => img.tags.join(",")),
+        };
 
-      setGen4Generations((prev) => [newGeneration, ...prev]);
+        const response = await fetch("/api/gen4", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
 
-      toast({
-        title: "Gen 4 generation completed",
-        description: "Your image has been generated successfully",
-      });
-    } catch (error) {
-      console.error("Gen 4 generation error:", error);
-      toast({
-        title: "Generation failed",
-        description:
-          error instanceof Error ? error.message : "Unknown error occurred",
-        variant: "destructive",
-      });
-    } finally {
-      setIsGen4Generating(false);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+
+        const newGeneration: Gen4Generation = {
+          id: Date.now().toString(),
+          prompt: gen4Prompt,
+          referenceImages: [...gen4ReferenceImages],
+          settings: { ...gen4Settings },
+          status: "completed",
+          outputUrl: result.imageUrl,
+          timestamp: Date.now(),
+        };
+
+        setGen4Generations((prev) => [newGeneration, ...prev]);
+
+        toast({
+          title: "Gen 4 generation completed",
+          description: "Your image has been generated successfully",
+        });
+      } catch (error) {
+        console.error("Gen 4 generation error:", error);
+        toast({
+          title: "Generation failed",
+          description:
+            error instanceof Error ? error.message : "Unknown error occurred",
+          variant: "destructive",
+        });
+      }
     }
-  };
+  );
 
   const addTagToGen4Image = (imageId: string, tag: string) => {
     if (!tag.trim()) return;
@@ -662,8 +672,6 @@ export default function VideoGeneratorApp() {
   const gen4ImageCount = gen4ReferenceImages.length;
   const gen4GenerationCount = gen4Generations.length;
 
-
-
   const openFullscreenImage = (src: string, mode: string) => {
     if (mode === "seedance") {
       setFullscreenVideo(src);
@@ -726,7 +734,11 @@ export default function VideoGeneratorApp() {
 
           {/* Workspace Tab */}
           <TabsContent value="workspace" className="space-y-6" forceMount>
-            <div className={`space-y-6 ${activeTab === "workspace" ? "" : "hidden"}`}>
+            <div
+              className={`space-y-6 ${
+                activeTab === "workspace" ? "" : "hidden"
+              }`}
+            >
               {/* Mode Selection */}
               <ModeSelection mode={mode} setMode={setMode} />
 
@@ -853,219 +865,227 @@ export default function VideoGeneratorApp() {
                           : "space-y-4"
                       }
                     >
-                      {filteredImages.filter((image) => image.mode === mode).map((image, index) => {
-                        const videos =
-                          image.videos && image.videos.length > 0
-                            ? image.videos
-                            : image.outputUrl
-                            ? [image.outputUrl]
-                            : [];
-                        const currentIdx = carouselIndex[image.id] ?? 0;
-                        const mediaUrl =
-                          videos[currentIdx] ??
-                          generatedVideos.find(
-                            (vid) => vid?.filename === image?.file?.name
-                          )?.outputUrl;
-                        return (
-                          <div
-                            key={image.id}
-                            className={`m-1 relative group border rounded-lg overflow-hidden ${
-                              image.selected ? "ring-2 ring-purple-500" : ""
-                            } ${
-                              viewMode === "list"
-                                ? "flex items-center gap-4 p-4"
-                                : ""
-                            }`}
-                          >
+                      {filteredImages
+                        .reverse()
+                        .filter((image) => image.mode === mode)
+                        .map((image) => {
+                          const videos =
+                            image.videos && image.videos.length > 0
+                              ? image.videos
+                              : image.outputUrl
+                              ? [image.outputUrl]
+                              : [];
+                          const currentIdx = carouselIndex[image.id] ?? 0;
+                          const mediaUrl =
+                            videos[currentIdx] ??
+                            generatedVideos.find(
+                              (vid) => vid?.filename === image?.file?.name
+                            )?.outputUrl;
+                          return (
                             <div
-                              className={`relative ${
+                              key={image.id}
+                              className={`m-1 relative group border rounded-lg overflow-hidden ${
+                                image.selected ? "ring-2 ring-purple-500" : ""
+                              } ${
                                 viewMode === "list"
-                                  ? "w-20 h-20 flex-shrink-0"
-                                  : "aspect-square"
+                                  ? "flex items-center gap-4 p-4"
+                                  : ""
                               }`}
                             >
-                              <img
-                                src={
-                                  `data:image/png;base64,${image.preview}` ||
-                                  "/placeholder.svg"
-                                }
-                                alt={image?.file?.name}
-                                className="w-full h-full object-cover"
-                              />
-                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                <div className="flex gap-2">
-                                  <Button
-                                    size="sm"
-                                    variant="secondary"
-                                    onClick={() =>
-                                      toggleImageSelection(image.id)
-                                    }
-                                  >
-                                    {image.selected ? (
-                                      <Check className="w-4 h-4" />
-                                    ) : (
-                                      <Plus className="w-4 h-4" />
-                                    )}
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="destructive"
-                                    onClick={() => removeImage(image.id)}
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="secondary"
-                                    onClick={() =>
-                                      openFullscreenImage(
-                                        image.preview || "/placeholder.svg",
-                                        "kontext"
-                                      )
-                                    }
-                                  >
-                                    <Search className="w-4 h-4" />
-                                  </Button>
-                                </div>
-                              </div>
-                              {image.status !== "idle" && (
-                                <div className="absolute top-2 right-2">
-                                  <Badge
-                                    variant={
-                                      image.status === "completed"
-                                        ? "default"
-                                        : image.status === "processing"
-                                        ? "secondary"
-                                        : image.status === "failed"
-                                        ? "destructive"
-                                        : "outline"
-                                    }
-                                  >
-                                    {image.status}
-                                  </Badge>
-                                </div>
-                              )}
-                            </div>
-
-                            <div
-                              className={`${
-                                viewMode === "list" ? "flex-1" : "pt-3"
-                              }`}
-                            >
-                              <div className="px-3 mb-3">
-                                <p className="font-medium text-sm truncate mb-2">
-                                  {image?.file?.name}
-                                </p>
-                                <Textarea
-                                  placeholder={
-                                    mode === "seedance"
-                                      ? "Enter video prompt..."
-                                      : "Enter edit prompt..."
+                              <div
+                                className={`relative ${
+                                  viewMode === "list"
+                                    ? "w-20 h-20 flex-shrink-0"
+                                    : "aspect-square"
+                                }`}
+                              >
+                                <img
+                                  src={
+                                    `data:image/png;base64,${image.preview}` ||
+                                    "/placeholder.svg"
                                   }
-                                  value={image.prompt}
-                                  onChange={(e) =>
-                                    setImages((prev) =>
-                                      prev.map((img) =>
-                                        img.id === image.id
-                                          ? { ...img, prompt: e.target.value }
-                                          : img
-                                      )
-                                    )
-                                  }
-                                  rows={2}
-                                  className="text-sm"
+                                  alt={image?.file?.name}
+                                  className="w-full h-full object-cover"
                                 />
-                              </div>
-                              {mode === "kontext" && image.prompt && (
-                                <Button
-                                  size="sm"
-                                  onClick={startGeneration}
-                                  disabled={image.status === "processing"}
-                                  className="mt-2 w-full"
-                                >
-                                  {image.status === "processing"
-                                    ? "Editing..."
-                                    : "Edit with Kontext"}
-                                </Button>
-                              )}
-                              {mediaUrl && (
-                                <div className="mt-2 relative overflow-hidden rounded-es-lg rounded-ee-lg border bg-white group z-[10]">
-                                  {mode === "seedance" ? (
-                                    <video
-                                      src={mediaUrl}
-                                      controls
-                                      className="w-full h-[180px] relative z-[10]"
-                                    />
-                                  ) : (
-                                    <img
-                                      src={mediaUrl}
-                                      alt="Edited"
-                                      className="w-full rounded"
-                                    />
-                                  )}
-                                  {videos.length > 1 && (
-                                    <div className="absolute flex items-center justify-between px-2 top-0 right-0 bottom-0 left-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <button
-                                        className="bg-black/50 text-white rounded-full flex items-center justify-center w-[24px] h-[24px] z-[999]"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setCarouselIndex((prev) => ({
-                                            ...prev,
-                                            [image.id]:
-                                              (currentIdx - 1 + videos.length) %
-                                              videos.length,
-                                          }));
-                                        }}
-                                      >
-                                        ‹
-                                      </button>
-                                      <button
-                                        className="bg-black/50 text-white rounded-full w-[24px] h-[24px] flex items-center justify-center z-[999]"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setCarouselIndex((prev) => ({
-                                            ...prev,
-                                            [image.id]:
-                                              (currentIdx + 1) % videos.length,
-                                          }));
-                                        }}
-                                      >
-                                        ›
-                                      </button>
-                                    </div>
-                                  )}
-
-                                  <div className="absolute top-2 right-2 opacity-0 bg-black/0 group-hover:bg-black/20 group-hover:opacity-100 transition-opacity z-[999]">
-                                    <div className="flex gap-1">
-                                      <Button
-                                        size="sm"
-                                        variant="secondary"
-                                        className="h-8 w-8 p-0"
-                                        onClick={() =>
-                                          openFullscreenImage(
-                                            mediaUrl || "/placeholder.svg",
-                                            mode === "seedance"
-                                              ? "seedance"
-                                              : "kontext"
-                                          )
-                                        }
-                                      >
-                                        <Search className="w-3 h-3" />
-                                      </Button>
-                                    </div>
+                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                  <div className="flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      onClick={() =>
+                                        toggleImageSelection(image.id)
+                                      }
+                                    >
+                                      {image.selected ? (
+                                        <Check className="w-4 h-4" />
+                                      ) : (
+                                        <Plus className="w-4 h-4" />
+                                      )}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => removeImage(image.id)}
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      onClick={() =>
+                                        openFullscreenImage(
+                                          image.preview || "/placeholder.svg",
+                                          "kontext"
+                                        )
+                                      }
+                                    >
+                                      <Search className="w-4 h-4" />
+                                    </Button>
                                   </div>
                                 </div>
-                              )}
+                                {image.status !== "idle" && (
+                                  <div className="absolute top-2 right-2">
+                                    <Badge
+                                      variant={
+                                        image.status === "completed"
+                                          ? "default"
+                                          : image.status === "processing"
+                                          ? "secondary"
+                                          : image.status === "failed"
+                                          ? "destructive"
+                                          : "outline"
+                                      }
+                                    >
+                                      {image.status}
+                                    </Badge>
+                                  </div>
+                                )}
+                              </div>
 
-                              {image.error && (
-                                <p className="text-red-500 text-xs mt-2">
-                                  {image.error}
-                                </p>
-                              )}
+                              <div
+                                className={`${
+                                  viewMode === "list" ? "flex-1" : "pt-3"
+                                }`}
+                              >
+                                <div className="px-3 mb-3">
+                                  <p className="font-medium text-sm truncate mb-2">
+                                    {image?.file?.name}
+                                  </p>
+                                  <Textarea
+                                    placeholder={
+                                      mode === "seedance"
+                                        ? "Enter video prompt..."
+                                        : "Enter edit prompt..."
+                                    }
+                                    value={image.prompt}
+                                    onChange={(e) =>
+                                      setImages((prev) =>
+                                        prev.map((img) =>
+                                          img.id === image.id
+                                            ? { ...img, prompt: e.target.value }
+                                            : img
+                                        )
+                                      )
+                                    }
+                                    rows={2}
+                                    className="text-sm"
+                                  />
+                                </div>
+                                {mode === "kontext" && image.prompt && (
+                                  <Button
+                                    size="sm"
+                                    onClick={() =>
+                                      startKontextGeneration("kontext")
+                                    }
+                                    disabled={kontextProcessing}
+                                    className="mt-2 w-full"
+                                  >
+                                    {kontextProcessing
+                                      ? "Editing..."
+                                      : "Edit with Kontext"}
+                                  </Button>
+                                )}
+                                {mediaUrl && (
+                                  <div className="mt-2 relative overflow-hidden rounded-es-lg rounded-ee-lg border bg-white group z-[10]">
+                                    {mode === "seedance" ? (
+                                      <video
+                                        src={mediaUrl}
+                                        controls
+                                        className="w-full h-[180px] relative z-[10]"
+                                      />
+                                    ) : (
+                                      <img
+                                        src={mediaUrl}
+                                        alt="Edited"
+                                        className="w-full rounded"
+                                      />
+                                    )}
+                                    {videos.length > 1 && (
+                                      <div className="absolute flex items-center justify-between px-2 top-0 right-0 bottom-0 left-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button
+                                          className="bg-black/50 text-white rounded-full flex items-center justify-center w-[24px] h-[24px] z-[999]"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setCarouselIndex((prev) => ({
+                                              ...prev,
+                                              [image.id]:
+                                                (currentIdx -
+                                                  1 +
+                                                  videos.length) %
+                                                videos.length,
+                                            }));
+                                          }}
+                                        >
+                                          ‹
+                                        </button>
+                                        <button
+                                          className="bg-black/50 text-white rounded-full w-[24px] h-[24px] flex items-center justify-center z-[999]"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setCarouselIndex((prev) => ({
+                                              ...prev,
+                                              [image.id]:
+                                                (currentIdx + 1) %
+                                                videos.length,
+                                            }));
+                                          }}
+                                        >
+                                          ›
+                                        </button>
+                                      </div>
+                                    )}
+
+                                    <div className="absolute top-2 right-2 opacity-0 bg-black/0 group-hover:bg-black/20 group-hover:opacity-100 transition-opacity z-[999]">
+                                      <div className="flex gap-1">
+                                        <Button
+                                          size="sm"
+                                          variant="secondary"
+                                          className="h-8 w-8 p-0"
+                                          onClick={() =>
+                                            openFullscreenImage(
+                                              mediaUrl || "/placeholder.svg",
+                                              mode === "seedance"
+                                                ? "seedance"
+                                                : "kontext"
+                                            )
+                                          }
+                                        >
+                                          <Search className="w-3 h-3" />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {image.error && (
+                                  <p className="text-red-500 text-xs mt-2">
+                                    {image.error}
+                                  </p>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
                     </div>
                   </CardContent>
                 </Card>
@@ -1101,11 +1121,11 @@ export default function VideoGeneratorApp() {
                         )}
                       </div>
                       <Button
-                        onClick={startGeneration}
-                        disabled={isGenerating || selectedCount === 0}
+                        onClick={() => startSeedanceGeneration("seedance")}
+                        disabled={seedanceProcessing || selectedCount === 0}
                         className="flex items-center gap-2"
                       >
-                        {isGenerating ? (
+                        {seedanceProcessing ? (
                           <>
                             <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                             Generating...
@@ -1126,676 +1146,37 @@ export default function VideoGeneratorApp() {
 
           {/* Gen 4 Tab */}
           <TabsContent value="gen4" className="space-y-6" forceMount>
-            <div
-              className={`grid grid-cols-1 lg:grid-cols-3 gap-6 ${
-                activeTab === "gen4" ? "" : "hidden"
-              }`}
-            >
-              <div className="col-span-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Sparkles className="w-5 h-5" />
-                      Gen 4 Image Generation
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
-                    {/* Reference Images Upload */}
-                    <div>
-                      <Label className="text-base font-medium mb-3 block">
-                        Reference Images
-                      </Label>
-                      <div
-                        className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg p-6 text-center hover:border-purple-400 transition-colors cursor-pointer"
-                        onDrop={(e) => handleDrop(e, true)}
-                        onDragOver={handleDragOver}
-                        onClick={() => gen4FileInputRef.current?.click()}
-                      >
-                        <Upload className="w-8 h-8 mx-auto mb-2 text-slate-400" />
-                        <p className="font-medium mb-1">Add reference images</p>
-                        <p className="text-sm text-slate-500">
-                          Up to 3 images for style reference
-                        </p>
-                      </div>
-                      <input
-                        ref={gen4FileInputRef}
-                        type="file"
-                        multiple
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => handleFileUpload(e.target.files, true)}
-                      />
-                    </div>
-
-                    {/* Reference Images Display */}
-                    {gen4ReferenceImages.length > 0 && (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        {gen4ReferenceImages.map((image, index) => (
-                          <div
-                            key={image.id}
-                            className="relative group border rounded-lg overflow-hidden"
-                          >
-                            <div className="aspect-square relative">
-                              <img
-                                src={image.preview || "/placeholder.svg"}
-                                alt={`Reference ${index + 1}`}
-                                className="w-full h-full object-cover"
-                              />
-                              <div className="absolute top-2 left-2">
-                                <Badge variant="secondary">
-                                  {index === 0
-                                    ? "1st"
-                                    : index === 1
-                                    ? "2nd"
-                                    : "3rd"}{" "}
-                                  Reference
-                                </Badge>
-                              </div>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                                onClick={() => removeImage(image.id, true)}
-                              >
-                                <X className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                                onClick={() =>
-                                  openFullscreenImage(
-                                    image.preview || "/placeholder.svg",
-                                    "gen4"
-                                  )
-                                }
-                              >
-                                <Search className="w-4 h-4" />
-                              </Button>
-                            </div>
-                            <div className="p-3">
-                              <div className="flex flex-wrap gap-1 mb-2">
-                                {image.tags.map((tag, tagIndex) => (
-                                  <Badge
-                                    key={tagIndex}
-                                    variant="outline"
-                                    className="text-xs cursor-pointer hover:bg-red-100"
-                                    onClick={() =>
-                                      removeTagFromGen4Image(image.id, tagIndex)
-                                    }
-                                  >
-                                    {tag} <X className="w-3 h-3 ml-1" />
-                                  </Badge>
-                                ))}
-                              </div>
-                              <div className="flex gap-2">
-                                <Input
-                                  placeholder="Add tag..."
-                                  className="text-sm"
-                                  onKeyPress={(e) => {
-                                    if (e.key === "Enter") {
-                                      addTagToGen4Image(
-                                        image.id,
-                                        e.currentTarget.value
-                                      );
-                                      e.currentTarget.value = "";
-                                    }
-                                  }}
-                                />
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={(e) => {
-                                    const input = e.currentTarget
-                                      .previousElementSibling as HTMLInputElement;
-                                    addTagToGen4Image(image.id, input.value);
-                                    input.value = "";
-                                  }}
-                                >
-                                  <Tag className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Generation Prompt */}
-                    <div>
-                      <Label
-                        htmlFor="gen4-prompt"
-                        className="text-base font-medium mb-3 block"
-                      >
-                        Generation Prompt
-                      </Label>
-                      <Textarea
-                        id="gen4-prompt"
-                        placeholder="Describe the image you want to generate..."
-                        value={gen4Prompt}
-                        onChange={(e) => setGen4Prompt(e.target.value)}
-                        rows={4}
-                      />
-                    </div>
-
-                    {/* Generation Settings */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div>
-                        <Label className="text-sm font-medium mb-2 block">
-                          Aspect Ratio
-                        </Label>
-                        <Select
-                          value={gen4Settings.aspectRatio}
-                          onValueChange={(value) =>
-                            setGen4Settings((prev) => ({
-                              ...prev,
-                              aspectRatio: value,
-                            }))
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="1:1">Square (1:1)</SelectItem>
-                            <SelectItem value="16:9">
-                              Landscape (16:9)
-                            </SelectItem>
-                            <SelectItem value="9:16">
-                              Portrait (9:16)
-                            </SelectItem>
-                            <SelectItem value="4:3">Standard (4:3)</SelectItem>
-                            <SelectItem value="3:4">Portrait (3:4)</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium mb-2 block">
-                          Resolution
-                        </Label>
-                        <Select
-                          value={gen4Settings.resolution}
-                          onValueChange={(value) =>
-                            setGen4Settings((prev) => ({
-                              ...prev,
-                              resolution: value,
-                            }))
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {GEN4_RESOLUTIONS.map((aspectRatio) => (
-                              <SelectItem
-                                defaultValue={GEN4_RESOLUTIONS[0].value}
-                                key={aspectRatio.value}
-                                value={aspectRatio.value}
-                              >
-                                {aspectRatio.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium mb-2 block">
-                          Seed (Optional)
-                        </Label>
-                        <Input
-                          type="number"
-                          placeholder="Random"
-                          value={gen4Settings.seed || ""}
-                          onChange={(e) =>
-                            setGen4Settings((prev) => ({
-                              ...prev,
-                              seed: e.target.value
-                                ? Number.parseInt(e.target.value)
-                                : undefined,
-                            }))
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    {/* Generate Button */}
-                    <Button
-                      onClick={generateGen4}
-                      disabled={
-                        isGen4Generating ||
-                        !gen4Prompt.trim() ||
-                        gen4ReferenceImages.length === 0
-                      }
-                      className="w-full flex items-center gap-2"
-                      size="lg"
-                    >
-                      {isGen4Generating ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          Generating...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-4 h-4" />
-                          Generate with Gen 4
-                        </>
-                      )}
-                    </Button>
-                  </CardContent>
-                </Card>
-              </div>
-              {/* Gen 4 Results */}
-              <div className="space-y-6 ">
-                <Card>
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="flex items-center gap-2">
-                        <CheckCircle2 className="w-5 h-5 text-green-600" />
-                        Generated Images
-                      </CardTitle>
-                      <Badge variant="outline" className="text-xs">
-                        {gen4Generations.length} results
-                      </Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    {isGenerating ? (
-                      <div className="flex flex-col items-center justify-center py-12 space-y-4">
-                        <div className="w-16 h-16 border-4 border-purple-200 border-t-purple-600 rounded-full animate-spin"></div>
-                        <p className="text-sm text-gray-600">
-                          Generating your images...
-                        </p>
-                        <div className="w-full bg-gray-200 rounded-full h-2 max-w-xs">
-                          <div
-                            className="bg-purple-600 h-2 rounded-full animate-pulse"
-                            style={{ width: "60%" }}
-                          ></div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 gap-4">
-                        {gen4Generations.length > 0 ? (
-                          gen4Generations.map((generation, index) => (
-                            <div key={generation.id} className="group relative">
-                              <div className="relative overflow-hidden rounded-lg border bg-white">
-                                <img
-                                  src={
-                                    generation.outputUrl
-                                      ? generation.outputUrl
-                                      : "/placeholder.svg?height=512&width=512"
-                                  }
-                                  alt="Generated image"
-                                  width={300}
-                                  height={300}
-                                  className="w-full aspect-square object-cover transition-transform group-hover:scale-105"
-                                />
-
-                                {/* Overlay Actions */}
-                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors">
-                                  <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <div className="flex gap-1">
-                                      <Button
-                                        size="sm"
-                                        variant="secondary"
-                                        className="h-8 w-8 p-0"
-                                        onClick={() =>
-                                          openFullscreenImage(
-                                            generation?.outputUrl || "",
-                                            "gen4"
-                                          )
-                                        }
-                                      >
-                                        <Search className="w-3 h-3" />
-                                      </Button>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* Image Info */}
-                              <div className="mt-2 space-y-2">
-                                <div className="flex items-center justify-between text-xs text-gray-500">
-                                  <span className="flex items-center gap-1">
-                                    <Clock className="w-3 h-3" />
-                                    {generation.timestamp}
-                                  </span>
-                                </div>
-
-                                {/* Action Buttons */}
-                                <div className="flex gap-1">
-                                  {generation?.outputUrl && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="flex-1 h-8 text-xs bg-transparent"
-                                      onClick={() =>
-                                        downloadFile(
-                                          generation?.outputUrl || ""
-                                        )
-                                      }
-                                    >
-                                      <Download className="w-3 h-3 mr-1" />
-                                      Download
-                                    </Button>
-                                  )}
-                                  {generation?.outputUrl && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-8 w-8 p-0 bg-transparent"
-                                      onClick={() =>
-                                        copyToClipboard(generation?.outputUrl || "")
-                                      }
-                                    >
-                                      <Copy className="w-3 h-3" />
-                                    </Button>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="flex items-center justify-center py-12 space-y-4">
-                            <p>No generations found.</p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
+            <Gen4
+              gen4Settings={gen4Settings}
+              setGen4Settings={setGen4Settings}
+              addTagToGen4Image={addTagToGen4Image}
+              removeTagFromGen4Image={removeTagFromGen4Image}
+              activeTab={activeTab}
+              gen4Generations={gen4Generations}
+              gen4Processing={gen4Processing}
+              openFullscreenImage={openFullscreenImage}
+              downloadFile={downloadFile}
+              copyToClipboard={copyToClipboard}
+              removeImage={removeImage}
+              gen4FileInputRef={gen4FileInputRef}
+              handleFileUpload={handleFileUpload}
+              handleDrop={handleDrop}
+              handleDragOver={handleDragOver}
+              gen4ReferenceImages={gen4ReferenceImages}
+              gen4Prompt={gen4Prompt}
+              setGen4Prompt={setGen4Prompt}
+              generateGen4={generateGen4}
+            />
           </TabsContent>
 
           {/* Settings Tab */}
           <TabsContent value="settings" className="space-y-6" forceMount>
-            <div
-              className={`grid grid-cols-1 lg:grid-cols-2 gap-6 ${
-                activeTab === "settings" ? "" : "hidden"
-              }`}
-            >
-              {/* Seedance Settings */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Video className="w-5 h-5" />
-                    Seedance Settings
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <Label className="text-sm font-medium mb-2 block">
-                      Model
-                    </Label>
-                    <Select
-                      value={settings.seedance.model}
-                      onValueChange={(value) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          seedance: { ...prev.seedance, model: value },
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {SEEDANCE_MODELS.map((model) => (
-                          <SelectItem key={model.value} value={model.value}>
-                            {model.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium mb-2 block">
-                      Resolution
-                    </Label>
-                    <Select
-                      value={settings.seedance.resolution}
-                      onValueChange={(value) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          seedance: { ...prev.seedance, resolution: value },
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {settings?.seedance?.model === SEEDANCE_MODELS[0].value
-                          ? SEEDANCE_LITE_RESOLUTIONS.map((resolution) => (
-                              <SelectItem
-                                defaultValue={
-                                  SEEDANCE_LITE_RESOLUTIONS[0].value
-                                }
-                                key={resolution.value}
-                                value={resolution.value}
-                              >
-                                {resolution.name}
-                              </SelectItem>
-                            ))
-                          : SEEDANCE_PRO_RESOLUTIONS.map((resolution) => (
-                              <SelectItem
-                                defaultValue={SEEDANCE_PRO_RESOLUTIONS[0].value}
-                                key={resolution.value}
-                                value={resolution.value}
-                              >
-                                {resolution.name}
-                              </SelectItem>
-                            ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium mb-2 block">
-                      Duration: {settings.seedance.duration}s
-                    </Label>
-                    <Select
-                      value={settings.seedance.duration.toString()}
-                      onValueChange={(value) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          seedance: {
-                            ...prev.seedance,
-                            duration: Number(value),
-                          },
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {SEEDANCE_DURATIONS.map((duration) => (
-                          <SelectItem
-                            key={duration.value}
-                            value={duration.value.toString()}
-                          >
-                            {duration.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="camera-fixed"
-                      checked={settings.seedance.cameraFixed}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          seedance: { ...prev.seedance, cameraFixed: checked },
-                        }))
-                      }
-                    />
-                    <Label htmlFor="camera-fixed">Fixed Camera</Label>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Kontext Settings */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <ImageIcon className="w-5 h-5" />
-                    Kontext Settings
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <Label className="text-sm font-medium mb-2 block">
-                      Model
-                    </Label>
-                    <Select
-                      value={settings.kontext.model}
-                      onValueChange={(value: "dev" | "max") =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          kontext: { ...prev.kontext, model: value },
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="dev">
-                          Dev (Fast & Affordable)
-                        </SelectItem>
-                        <SelectItem value="max">
-                          Max (Premium Quality)
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                    <h4 className="font-medium mb-2">Model Comparison</h4>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span>Dev Model:</span>
-                        <span className="text-green-600">
-                          ~30s, $0.003/image
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Max Model:</span>
-                        <span className="text-blue-600">
-                          ~60s, $0.055/image
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* General Settings */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Settings className="w-5 h-5" />
-                    General Settings
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="auto-save"
-                      checked={settings.general.autoSave}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          general: { ...prev.general, autoSave: checked },
-                        }))
-                      }
-                    />
-                    <Label htmlFor="auto-save">Auto-save to IndexedDB</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="show-costs"
-                      checked={settings.general.showCostEstimates}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          general: {
-                            ...prev.general,
-                            showCostEstimates: checked,
-                          },
-                        }))
-                      }
-                    />
-                    <Label htmlFor="show-costs">Show cost estimates</Label>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium mb-2 block">
-                      Max Concurrent Jobs: {settings.general.maxConcurrentJobs}
-                    </Label>
-                    <Slider
-                      value={[settings.general.maxConcurrentJobs]}
-                      onValueChange={([value]) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          general: {
-                            ...prev.general,
-                            maxConcurrentJobs: value,
-                          },
-                        }))
-                      }
-                      min={1}
-                      max={5}
-                      step={1}
-                      className="w-full"
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Cost Estimation */}
-              {settings.general.showCostEstimates && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <DollarSign className="w-5 h-5" />
-                      Cost Estimation
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                        <p className="text-sm font-medium text-blue-700 dark:text-blue-300">
-                          Seedance Videos
-                        </p>
-                        <p className="text-lg font-bold text-blue-900 dark:text-blue-100">
-                          ${(selectedCount * 0.12).toFixed(2)}
-                        </p>
-                        <p className="text-xs text-blue-600 dark:text-blue-400">
-                          {selectedCount} selected × $0.12
-                        </p>
-                      </div>
-                      <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                        <p className="text-sm font-medium text-green-700 dark:text-green-300">
-                          Kontext Edits
-                        </p>
-                        <p className="text-lg font-bold text-green-900 dark:text-green-100">
-                          $
-                          {(
-                            selectedCount *
-                            (settings.kontext.model === "dev" ? 0.003 : 0.055)
-                          ).toFixed(3)}
-                        </p>
-                        <p className="text-xs text-green-600 dark:text-green-400">
-                          {selectedCount} selected × $
-                          {settings.kontext.model === "dev" ? "0.003" : "0.055"}
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
+            <Setting
+              settings={settings}
+              setSettings={setSettings}
+              activeTab={activeTab}
+              selectedCount={images.filter((img) => img.selected).length}
+            />
           </TabsContent>
         </Tabs>
       </div>
