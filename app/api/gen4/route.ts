@@ -9,69 +9,25 @@ export async function POST(request: NextRequest) {
       );
     }
     const apiKey = process.env.REPLICATE_API_TOKEN;
-    const formData = await request.formData();
-    const prompt = formData.get("prompt") as string;
-    const aspectRatio = formData.get("aspectRatio") as string;
-    const resolution = formData.get("resolution") as string;
+    const {
+      prompt,
+      aspectRatio,
+      resolution,
+      referenceImages,
+      referenceTags,
+    }: {
+      prompt: string;
+      aspectRatio: string;
+      resolution: string;
+      referenceImages: string[];
+      referenceTags: string[];
+    } = await request.json();
 
     if (!prompt) {
       return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
     }
 
-    // Step 1: Upload reference images
-    const referenceImages: string[] = [];
-    const referenceTags: string[] = [];
-    const uploadPromises = [];
-
-    for (let i = 1; i <= 3; i++) {
-      const image = formData.get(`referenceImage${i}`) as File;
-      const imageTags = formData.get(`referenceTags${i}`) as string;
-
-      if (!image) continue;
-
-      const uploadPromise = (async () => {
-        const imageBuffer = await image.arrayBuffer();
-        const imageBlob = new Blob([imageBuffer], { type: image.type });
-        const uploadFormData = new FormData();
-        uploadFormData.append("filename", image.name);
-        uploadFormData.append("content", imageBlob);
-
-        const nestedArray: string[] = imageTags ? JSON.parse(imageTags) : [];
-        const flatArray = nestedArray.flat();
-
-        const uploadResponse = await fetch(
-          "https://api.replicate.com/v1/files",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Token ${apiKey}`,
-            },
-            body: uploadFormData,
-          }
-        );
-
-        if (!uploadResponse.ok) {
-          const errorText = await uploadResponse.text();
-          throw new Error(
-            `Image upload failed: ${uploadResponse.status} - ${errorText}`
-          );
-        }
-
-        const uploadResult = await uploadResponse.json();
-        const servingUrl = uploadResult.urls.get;
-
-        referenceImages.push(servingUrl);
-        referenceTags.push(flatArray.join(","));
-
-        return servingUrl;
-      })();
-
-      uploadPromises.push(uploadPromise);
-    }
-
-    await Promise.all(uploadPromises);
-
-    if (referenceImages.length === 0) {
+    if (!referenceImages || referenceImages.length === 0) {
       return NextResponse.json(
         { error: "At least one reference image is required" },
         { status: 400 }

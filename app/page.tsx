@@ -319,12 +319,53 @@ export default function VideoGeneratorApp() {
     );
   };
 
-  const startGeneration = async (mode: "seedance" | "kontext") => {
-    const selectedImages = images.filter(
+  const uploadFile = async (fileOrUrl: File | string) => {
+    // If fileOrUrl is already a URL string, just return it
+    if (typeof fileOrUrl === "string") {
+      return fileOrUrl;
+    }
+
+    // Otherwise, it's a File object that needs to be uploaded
+    const formData = new FormData();
+    formData.append("media", fileOrUrl);
+    try {
+      const response = await fetch("/api/upload-media", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.error || `File upload failed: ${response.statusText}`
+        );
+      }
+      const result = await response.json();
+      if (!result.urls || !result.urls.get) {
+        throw new Error("Invalid response from upload API");
+      }
+      return result.urls.get as string;
+    } catch (error) {
+      console.error("Upload error:", error);
+      toast({
+        title: "Upload Failed",
+        description:
+          error instanceof Error ? error.message : "An unknown error occurred",
+        variant: "destructive",
+      });
+      throw error;
+    }
+  };
+
+  const startGeneration = async (
+    mode: "seedance" | "kontext",
+    images: ImageData[]
+  ) => {
+    const modeImages = images.filter((img) => img?.mode === mode);
+    const selectedImages = modeImages.filter(
       (img) => img?.selected && img?.prompt?.trim()
     );
 
-    if (selectedImages?.length === 0) {
+    if (selectedImages.length === 0) {
       toast({
         title: "No images selected",
         description: "Please select images with prompts to generate videos",
@@ -333,34 +374,57 @@ export default function VideoGeneratorApp() {
       return;
     }
 
+    // Mark selected images as processing
     setImages((prev) =>
-      prev.map((img) => (img.selected ? { ...img, status: "processing" } : img))
+      prev.map((img) =>
+        img.selected && img.mode === mode
+          ? { ...img, status: "processing" }
+          : img
+      )
     );
 
     try {
-      const formData = new FormData();
+      const fileUrls = await Promise.all(
+        selectedImages.map(async (img) => {
+          if (img.file) {
+            return uploadFile(img.file);
+          }
 
-      selectedImages.forEach((img) => {
-        formData.append("images", img.file);
-      });
+          const dbImg = await dbManager.getImage(img.id);
+          if (dbImg?.fileUrl) return dbImg.fileUrl;
 
-      const metadata = {
-        prompts: selectedImages?.map((img) => img.prompt),
-        fileUrls: selectedImages
-          ?.map((img) => img.fileUrl)
-          .filter((url) => url),
+          if (dbImg?.preview) {
+            try {
+              const blob = await (
+                await fetch(`data:image/png;base64,${dbImg.preview}`)
+              ).blob();
+              const file = new File([blob], `image-${img.id}.png`, {
+                type: "image/png",
+              });
+              return uploadFile(file);
+            } catch (error) {
+              console.error("Error converting base64 to blob:", error);
+            }
+          }
+
+          return "";
+        })
+      );
+
+      const payload = {
+        fileUrls,
+        prompts: selectedImages.map((img) => img.prompt),
         seedanceModel: settings?.seedance?.model,
         resolution: settings?.seedance?.resolution,
         duration: settings?.seedance?.duration,
         camera_fixed: settings?.seedance?.cameraFixed,
-        mode: mode,
+        mode,
       };
-
-      formData.append("metadata", JSON.stringify(metadata));
 
       const response = await fetch("/api/generate-media", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -368,42 +432,53 @@ export default function VideoGeneratorApp() {
       }
 
       const result = await response.json();
-      setGeneratedVideos(result?.generatedResponse);
-      // kick off job-status polling so `updateImagesWithResults` will add the outputUrl & videos
-      setJobStatus({ ...result, tasks: result.generatedResponse });
+      const generated = result?.generatedResponse || [];
 
+      setGeneratedVideos(generated);
+      setJobStatus({ ...result, tasks: generated });
+
+      // Mark completed
       setImages((prev) =>
         prev.map((img) =>
-          img.selected ? { ...img, status: "completed" } : img
+          img.selected && img.mode === mode
+            ? { ...img, status: "completed" }
+            : img
         )
       );
 
-      let i = 0;
-      for await (const image of selectedImages) {
-        // get and overwrite and store in index db
-        const img = await dbManager.getImage(image.id);
-        if (img) {
-          const videos = img.videos || [];
-          if (result.generatedResponse[i].outputUrl) {
-            videos.push(result.generatedResponse[i].outputUrl);
-            await dbManager.saveImage(
-              image.id,
-              {
-                name: img?.filename || image.file?.name,
-                type: image?.file?.type || img?.type || "",
-                size: image?.file?.size || img?.size || 0,
-              },
-              result?.generatedResponse[i]?.fileUrl || "",
-              image.preview,
-              image.prompt,
-              image.selected,
-              image.status,
-              videos,
-              image.mode
-            );
-          }
+      for (let i = 0; i < modeImages.length; i++) {
+        const image = modeImages[i];
+        const dbImage = await dbManager.getImage(image.id);
+        if (!dbImage) continue;
+
+        const newVideoUrl = generated[i]?.outputUrl;
+        const fileUrl = generated[i]?.fileUrl || dbImage.fileUrl || "";
+
+        const existingVideos = Array.isArray(dbImage.videos)
+          ? [...dbImage.videos]
+          : [];
+
+        if (newVideoUrl && !existingVideos.includes(newVideoUrl)) {
+          existingVideos.push(newVideoUrl);
         }
-        i++;
+
+        const updatedImageData = {
+          name: image.file?.name ?? dbImage.filename ?? "Unnamed Image",
+          type: image.file?.type ?? dbImage.type ?? "image/png",
+          size: image.file?.size ?? dbImage.size ?? 0,
+        };
+
+        await dbManager.saveImage(
+          image.id,
+          updatedImageData,
+          fileUrl,
+          image.preview ?? dbImage.preview,
+          image.prompt ?? dbImage.prompt,
+          image.selected ?? dbImage.selected,
+          image.status ?? dbImage.status,
+          existingVideos,
+          image.mode ?? dbImage.mode
+        );
       }
 
       loadFromIndexedDB();
@@ -424,10 +499,10 @@ export default function VideoGeneratorApp() {
   };
 
   const { onSubmit: startSeedanceGeneration, processing: seedanceProcessing } =
-    useLoading(() => startGeneration("seedance"));
+    useLoading(() => startGeneration("seedance", images));
 
   const { onSubmit: startKontextGeneration, processing: kontextProcessing } =
-    useLoading(() => startGeneration("kontext"));
+    useLoading(() => startGeneration("kontext", images));
 
   const sendToGen4 = () => {
     const selectedImages = images.filter((img) => img.selected);
@@ -478,25 +553,25 @@ export default function VideoGeneratorApp() {
       }
 
       try {
-        const formData = new FormData();
-        formData.append("prompt", gen4Prompt);
-        formData.append("aspectRatio", gen4Settings.aspectRatio);
-        formData.append("resolution", gen4Settings.resolution);
-        if (gen4Settings.seed) {
-          formData.append("seed", gen4Settings.seed.toString());
-        }
+        const referenceImages = await Promise.all(
+          gen4ReferenceImages.map((img) => uploadFile(img.file))
+        );
 
-        gen4ReferenceImages.forEach((img, index) => {
-          formData.append(`referenceImage${index + 1}`, img.file);
-          formData.append(
-            `referenceTags${index + 1}`,
-            JSON.stringify(img.tags)
-          );
-        });
+        const payload = {
+          prompt: gen4Prompt,
+          aspectRatio: gen4Settings.aspectRatio,
+          resolution: gen4Settings.resolution,
+          seed: gen4Settings.seed,
+          referenceImages,
+          referenceTags: gen4ReferenceImages.map((img) => img.tags.join(",")),
+        };
 
         const response = await fetch("/api/gen4", {
           method: "POST",
-          body: formData,
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
         });
 
         if (!response.ok) {
