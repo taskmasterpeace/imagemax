@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useCallback } from "react";
+import React, { useCallback, useState, useEffect, useRef } from "react";
 
-import { useState, useEffect, useRef } from "react";
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -106,7 +106,7 @@ export default function VideoGeneratorApp() {
   // Load data from IndexedDB on mount
   useEffect(() => {
     loadFromIndexedDB();
-    loadTemplates();
+    loadTemplatesFromDB();
   }, []);
 
   // Auto-save to IndexedDB when images change
@@ -165,8 +165,19 @@ export default function VideoGeneratorApp() {
     }
   };
 
-  const loadTemplates = () => {
-    setTemplates(defaultTemplates);
+  const loadTemplatesFromDB = async () => {
+    try {
+      const stored = await dbManager.getTemplates();
+      if (stored && stored.length > 0) {
+        setTemplates(stored);
+      } else {
+        setTemplates(defaultTemplates);
+        await dbManager.saveTemplates(defaultTemplates);
+      }
+    } catch (err) {
+      console.error("Error loading templates:", err);
+      setTemplates(defaultTemplates);
+    }
   };
 
   const handleFileUpload = async (files: FileList | null, isGen4 = false) => {
@@ -279,10 +290,56 @@ export default function VideoGeneratorApp() {
       )
     );
 
+    // persist usageCount update
+    dbManager.saveTemplates(
+      templates.map((t) =>
+        t.id === selectedTemplate ? { ...t, usageCount: t.usageCount + 1 } : t
+      )
+    ).catch(console.error);
+
     toast({
       title: "Template applied",
       description: `Applied "${template.name}" to selected images`,
     });
+  };
+
+  const addTemplate = async (template: Template) => {
+    setTemplates((prev) => [...prev, template]);
+    try {
+      await dbManager.saveTemplate(template);
+    } catch (err) {
+      console.error("Failed to save template", err);
+    }
+  };
+
+  const resetTemplates = async () => {
+    try {
+      await dbManager.clearTemplates();
+      await dbManager.saveTemplates(defaultTemplates);
+      setTemplates(defaultTemplates);
+      setSelectedTemplate("");
+    } catch (err) {
+      console.error("Failed to reset templates", err);
+    }
+  };
+
+  const updateTemplate = async (template: Template) => {
+    setTemplates((prev) => prev.map((t) => (t.id === template.id ? template : t)));
+    try {
+      await dbManager.saveTemplate(template);
+    } catch (err) {
+      console.error("Failed to update template", err);
+    }
+  };
+
+  const deleteTemplate = async (id: string) => {
+    setTemplates((prev) => prev.filter((t) => t.id !== id));
+    if (selectedTemplate === id) setSelectedTemplate("");
+    try {
+      await dbManager.removeTemplate(id);
+    } catch (err) {
+      console.error("Failed to remove template", err);
+    }
   };
 
   const applyBulkPrompt = () => {
@@ -759,6 +816,10 @@ export default function VideoGeneratorApp() {
                     setSelectedTemplate={setSelectedTemplate}
                     selectedCount={selectedCount}
                     applyTemplateToSelected={applyTemplateToSelected}
+                    addTemplate={addTemplate}
+                    deleteTemplate={deleteTemplate}
+                    updateTemplate={updateTemplate}
+                    resetTemplates={resetTemplates}
                   />
 
                   <BulkActionsPanel

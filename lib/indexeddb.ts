@@ -1,4 +1,4 @@
-import { ImageData } from "@/types";
+import { ImageData, Template } from "@/types";
 
 export interface JobData {
   jobId: string;
@@ -19,7 +19,7 @@ export interface TaskData {
 
 class IndexedDBManager {
   private dbName = "seedance-generator";
-  private version = 1;
+  private version = 2;
   private db: IDBDatabase | null = null;
 
   async init(): Promise<void> {
@@ -50,6 +50,11 @@ class IndexedDBManager {
         if (!db.objectStoreNames.contains("images")) {
           const imagesStore = db.createObjectStore("images", { keyPath: "id" });
           imagesStore.createIndex("jobId", "jobId", { unique: false });
+        }
+
+        // Create templates store for user-defined prompt templates
+        if (!db.objectStoreNames.contains("templates")) {
+          db.createObjectStore("templates", { keyPath: "id" });
         }
       };
     });
@@ -202,6 +207,61 @@ class IndexedDBManager {
       const store = transaction.objectStore("images");
       const request = store.delete(id);
 
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    });
+  }
+
+  async saveTemplates(templates: Template[]): Promise<void> {
+    if (!this.db) throw new Error("Database not initialized");
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["templates"], "readwrite");
+      const store = transaction.objectStore("templates");
+      templates.forEach((t) => store.put(t));
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  }
+
+  async saveTemplate(template: Template): Promise<void> {
+    if (!this.db) throw new Error("Database not initialized");
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["templates"], "readwrite");
+      const store = transaction.objectStore("templates");
+      const request = store.put(template);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    });
+  }
+
+  async getTemplates(): Promise<Template[]> {
+    if (!this.db) throw new Error("Database not initialized");
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["templates"], "readonly");
+      const store = transaction.objectStore("templates");
+      const request = store.getAll();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result ?? []);
+    });
+  }
+
+  async removeTemplate(id: string): Promise<void> {
+    if (!this.db) throw new Error("Database not initialized");
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["templates"], "readwrite");
+      const store = transaction.objectStore("templates");
+      const request = store.delete(id);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    });
+  }
+
+  async clearTemplates(): Promise<void> {
+    if (!this.db) throw new Error("Database not initialized");
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["templates"], "readwrite");
+      const store = transaction.objectStore("templates");
+      const request = store.clear();
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();
     });
