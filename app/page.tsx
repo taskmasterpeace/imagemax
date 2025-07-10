@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useCallback, useState, useEffect, useRef } from "react";
+import React, { useCallback } from "react";
 
-
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -96,6 +96,36 @@ export default function VideoGeneratorApp() {
   });
   const [gen4Generations, setGen4Generations] = useState<Gen4Generation[]>([]);
 
+  // ----- Template CRUD handlers -----
+  const addTemplate = (template: Template) => {
+    setTemplates((prev) => [...prev, template]);
+  };
+
+  const deleteTemplate = (id: string) => {
+    setTemplates((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const updateTemplate = (template: Template) => {
+    setTemplates((prev) =>
+      prev.map((t) => (t.id === template.id ? template : t))
+    );
+  };
+
+  const resetTemplates = () => {
+    setTemplates(defaultTemplates);
+  };
+
+  // ----- Gen 4 helper handlers (stub implementations for now) -----
+  const replaceReferenceWithGen = (outputUrl: string, slot: number) => {
+    // TODO: implement proper replacement logic. For now, simply log.
+    console.log("replaceReferenceWithGen", { outputUrl, slot });
+  };
+
+  const sendGenerationToWorkspace = (outputUrl: string) => {
+    // TODO: move generation result to main workspace. For now, log.
+    console.log("sendGenerationToWorkspace", { outputUrl });
+  };
+
   // Settings state
   const [settings, setSettings] = useState(defaultSettings);
 
@@ -106,7 +136,7 @@ export default function VideoGeneratorApp() {
   // Load data from IndexedDB on mount
   useEffect(() => {
     loadFromIndexedDB();
-    loadTemplatesFromDB();
+    loadTemplates();
   }, []);
 
   // Auto-save to IndexedDB when images change
@@ -165,19 +195,8 @@ export default function VideoGeneratorApp() {
     }
   };
 
-  const loadTemplatesFromDB = async () => {
-    try {
-      const stored = await dbManager.getTemplates();
-      if (stored && stored.length > 0) {
-        setTemplates(stored);
-      } else {
-        setTemplates(defaultTemplates);
-        await dbManager.saveTemplates(defaultTemplates);
-      }
-    } catch (err) {
-      console.error("Error loading templates:", err);
-      setTemplates(defaultTemplates);
-    }
+  const loadTemplates = () => {
+    setTemplates(defaultTemplates);
   };
 
   const handleFileUpload = async (files: FileList | null, isGen4 = false) => {
@@ -290,56 +309,10 @@ export default function VideoGeneratorApp() {
       )
     );
 
-    // persist usageCount update
-    dbManager.saveTemplates(
-      templates.map((t) =>
-        t.id === selectedTemplate ? { ...t, usageCount: t.usageCount + 1 } : t
-      )
-    ).catch(console.error);
-
     toast({
       title: "Template applied",
       description: `Applied "${template.name}" to selected images`,
     });
-  };
-
-  const addTemplate = async (template: Template) => {
-    setTemplates((prev) => [...prev, template]);
-    try {
-      await dbManager.saveTemplate(template);
-    } catch (err) {
-      console.error("Failed to save template", err);
-    }
-  };
-
-  const resetTemplates = async () => {
-    try {
-      await dbManager.clearTemplates();
-      await dbManager.saveTemplates(defaultTemplates);
-      setTemplates(defaultTemplates);
-      setSelectedTemplate("");
-    } catch (err) {
-      console.error("Failed to reset templates", err);
-    }
-  };
-
-  const updateTemplate = async (template: Template) => {
-    setTemplates((prev) => prev.map((t) => (t.id === template.id ? template : t)));
-    try {
-      await dbManager.saveTemplate(template);
-    } catch (err) {
-      console.error("Failed to update template", err);
-    }
-  };
-
-  const deleteTemplate = async (id: string) => {
-    setTemplates((prev) => prev.filter((t) => t.id !== id));
-    if (selectedTemplate === id) setSelectedTemplate("");
-    try {
-      await dbManager.removeTemplate(id);
-    } catch (err) {
-      console.error("Failed to remove template", err);
-    }
   };
 
   const applyBulkPrompt = () => {
@@ -609,18 +582,32 @@ export default function VideoGeneratorApp() {
         return;
       }
 
+      let tempId: string = "";
       try {
+        tempId = Date.now().toString();
+        setGen4Generations((prev) => [
+          {
+            id: tempId,
+            prompt: gen4Prompt,
+            referenceImages: [...gen4ReferenceImages],
+            settings: { ...gen4Settings },
+            status: "processing",
+            timestamp: Date.now(),
+          },
+          ...prev,
+        ]);
+
         const referenceImages = await Promise.all(
           gen4ReferenceImages.map((img) => uploadFile(img.file))
         );
 
         const payload = {
           prompt: gen4Prompt,
-          aspectRatio: gen4Settings.aspectRatio,
+          seed: gen4Settings.seed ?? null,
           resolution: gen4Settings.resolution,
-          seed: gen4Settings.seed,
-          referenceImages,
-          referenceTags: gen4ReferenceImages.map((img) => img.tags.join(",")),
+          aspect_ratio: gen4Settings.aspectRatio,
+          reference_tags: gen4ReferenceImages.map((img) => img.tags.join(",")),
+          reference_images: referenceImages,
         };
 
         const response = await fetch("/api/gen4", {
@@ -637,17 +624,15 @@ export default function VideoGeneratorApp() {
 
         const result = await response.json();
 
-        const newGeneration: Gen4Generation = {
-          id: Date.now().toString(),
-          prompt: gen4Prompt,
-          referenceImages: [...gen4ReferenceImages],
-          settings: { ...gen4Settings },
-          status: "completed",
-          outputUrl: result.imageUrl,
-          timestamp: Date.now(),
-        };
+        
 
-        setGen4Generations((prev) => [newGeneration, ...prev]);
+        setGen4Generations((prev) =>
+          prev.map((gen) =>
+            gen.id === tempId
+              ? { ...gen, status: "completed", outputUrl: result.imageUrl }
+              : gen
+          )
+        );
 
         toast({
           title: "Gen 4 generation completed",
@@ -655,6 +640,12 @@ export default function VideoGeneratorApp() {
         });
       } catch (error) {
         console.error("Gen 4 generation error:", error);
+        // Mark placeholder as failed
+        setGen4Generations((prev) =>
+          prev.map((gen) =>
+            gen.id === tempId ? { ...gen, status: "failed" } : gen
+          )
+        );
         toast({
           title: "Generation failed",
           description:
@@ -956,8 +947,8 @@ export default function VideoGeneratorApp() {
                               <div
                                 className={`relative ${
                                   viewMode === "list"
-                                    ? "w-20 h-20 flex-shrink-0"
-                                    : "aspect-square"
+                                    ? "w-32 h-32 flex-shrink-0"
+                                    : ""
                                 }`}
                               >
                                 <img
@@ -966,7 +957,7 @@ export default function VideoGeneratorApp() {
                                     "/placeholder.svg"
                                   }
                                   alt={image?.file?.name}
-                                  className="w-full h-full object-cover"
+                                  className="w-full h-full object-contain bg-black/10"
                                 />
                                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                   <div className="flex gap-2">
@@ -1051,6 +1042,59 @@ export default function VideoGeneratorApp() {
                                     rows={2}
                                     className="text-sm"
                                   />
+
+                                  {/* Final frame uploader / preview */}
+                                  {(!image.lastFramePreview) ? (
+                                    <div className="mt-2 text-xs">
+                                      <label className="cursor-pointer text-purple-600 hover:underline">
+                                        Add final frame
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          className="hidden"
+                                          onChange={(e) => {
+                                            const file = e.target.files?.[0];
+                                            if (!file) return;
+                                            const reader = new FileReader();
+                                            reader.onload = (ev) => {
+                                              const preview = ev.target?.result as string;
+                                              setImages((prev) =>
+                                                prev.map((img) =>
+                                                  img.id === image.id
+                                                    ? { ...img, lastFramePreview: preview, lastFrameFile: file }
+                                                    : img
+                                                )
+                                              );
+                                            };
+                                            reader.readAsDataURL(file);
+                                          }}
+                                        />
+                                      </label>
+                                    </div>
+                                  ) : (
+                                    <div className="mt-2 relative group">
+                                      <img
+                                        src={image.lastFramePreview}
+                                        alt="Final frame preview"
+                                        className="w-full max-h-40 object-contain rounded border"
+                                      />
+                                      <button
+                                        type="button"
+                                        className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-5 h-5 text-xs hidden group-hover:flex items-center justify-center"
+                                        onClick={() =>
+                                          setImages((prev) =>
+                                            prev.map((img) =>
+                                              img.id === image.id
+                                                ? { ...img, lastFramePreview: null, lastFrameFile: undefined }
+                                                : img
+                                            )
+                                          )
+                                        }
+                                      >
+                                        ×
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                                 {mode === "kontext" && image.prompt && (
                                   <Button
@@ -1227,6 +1271,8 @@ export default function VideoGeneratorApp() {
               gen4Prompt={gen4Prompt}
               setGen4Prompt={setGen4Prompt}
               generateGen4={generateGen4}
+              replaceReferenceWithGen={replaceReferenceWithGen}
+              sendGenerationToWorkspace={sendGenerationToWorkspace}
             />
           </TabsContent>
 

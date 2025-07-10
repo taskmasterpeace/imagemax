@@ -46,7 +46,10 @@ function Gen4({
   addTagToGen4Image,
   gen4Settings,
   setGen4Settings,
+  replaceReferenceWithGen,
+  sendGenerationToWorkspace,
 }: Gen4Props) {
+  
   return (
     <div
       className={`grid grid-cols-1 lg:grid-cols-3 gap-6 ${
@@ -69,18 +72,27 @@ function Gen4({
               </Label>
               <div
                 className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg p-6 text-center hover:border-purple-400 transition-colors cursor-pointer"
-                onDrop={(e: React.DragEvent<HTMLDivElement>) =>
-                  handleDrop(e, true)
-                }
-                onDragOver={(e: React.DragEvent<HTMLDivElement>) =>
-                  handleDragOver(e)
-                }
-                onClick={() => gen4FileInputRef.current?.click()}
+                onDrop={(e) => {
+                  if (e.target === e.currentTarget) handleDrop(e, true);
+                }}
+                onDragOver={(e) => {
+                  if (e.target === e.currentTarget) handleDragOver(e);
+                }}
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) gen4FileInputRef.current?.click();
+                }}
+                onPaste={(e) => {
+                  if (e.target === e.currentTarget && e.clipboardData && e.clipboardData.files.length > 0) {
+                    handleFileUpload(e.clipboardData.files, true);
+                  }
+                }}
               >
                 <Upload className="w-8 h-8 mx-auto mb-2 text-slate-400" />
-                <p className="font-medium mb-1">Add reference images</p>
+                <p className="font-medium mb-1">
+                  <span className="font-bold text-purple-600">Paste (Ctrl+V)</span>, drop, or click to add reference images
+                </p>
                 <p className="text-sm text-slate-500">
-                  Up to 3 images for style reference
+                  You can paste screenshots or images copied to your clipboard, drag and drop, or click to select files. Up to 3 images for style reference.
                 </p>
               </div>
               <input
@@ -103,7 +115,13 @@ function Gen4({
                   >
                     <div className="aspect-square relative">
                       <img
-                        src={image.preview || "/placeholder.svg"}
+                        src={
+                          image.preview
+                            ? image.preview.startsWith("data:") || image.preview.startsWith("blob:")
+                              ? image.preview
+                              : `data:image/png;base64,${image.preview}`
+                            : "/placeholder.svg"
+                        }
                         alt={`Reference ${index + 1}`}
                         className="w-full h-full object-cover"
                       />
@@ -351,6 +369,20 @@ function Gen4({
                         {/* Overlay Actions */}
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors">
                           <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="flex gap-1 mb-1">
+                              <Button size="sm" variant="secondary" className="h-8 w-8 p-0" onClick={() => replaceReferenceWithGen(generation.outputUrl || '', 0)} title="Set as Ref 1">
+                                1
+                              </Button>
+                              <Button size="sm" variant="secondary" className="h-8 w-8 p-0" onClick={() => replaceReferenceWithGen(generation.outputUrl || '', 1)} title="Set as Ref 2">
+                                2
+                              </Button>
+                              <Button size="sm" variant="secondary" className="h-8 w-8 p-0" onClick={() => replaceReferenceWithGen(generation.outputUrl || '', 2)} title="Set as Ref 3">
+                                3
+                              </Button>
+                              <Button size="sm" variant="secondary" className="h-8 w-8 p-0" onClick={() => sendGenerationToWorkspace(generation.outputUrl || '')} title="To Workspace">
+                                <Upload className="w-3 h-3" />
+                              </Button>
+                            </div>
                             <div className="flex gap-1">
                               <Button
                                 size="sm"

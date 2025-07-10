@@ -19,7 +19,7 @@ export interface TaskData {
 
 class IndexedDBManager {
   private dbName = "seedance-generator";
-  private version = 2;
+  private version = 3;
   private db: IDBDatabase | null = null;
 
   async init(): Promise<void> {
@@ -50,6 +50,12 @@ class IndexedDBManager {
         if (!db.objectStoreNames.contains("images")) {
           const imagesStore = db.createObjectStore("images", { keyPath: "id" });
           imagesStore.createIndex("jobId", "jobId", { unique: false });
+        }
+
+        // Create referenceLibrary store for saved reference images
+        if (!db.objectStoreNames.contains("referenceLibrary")) {
+          const refStore = db.createObjectStore("referenceLibrary", { keyPath: "id" });
+          refStore.createIndex("tags", "tags", { unique: false, multiEntry: true });
         }
 
         // Create templates store for user-defined prompt templates
@@ -196,6 +202,44 @@ class IndexedDBManager {
 
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result);
+    });
+  }
+
+    /* ------------------------------------------------------------------
+   * Reference Library helpers
+   * ------------------------------------------------------------------*/
+
+  async addReference(id: string, thumbBlob: Blob, fullBlob: Blob, tags: string[]): Promise<void> {
+    if (!this.db) throw new Error("Database not initialized");
+    const data = { id, thumbBlob, fullBlob, tags };
+    return new Promise((resolve, reject) => {
+      const tx = this.db!.transaction(["referenceLibrary"], "readwrite");
+      const store = tx.objectStore("referenceLibrary");
+      const req = store.put(data);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => resolve();
+    });
+  }
+
+  async getAllReferences(): Promise<Array<{ id: string; thumbBlob: Blob; fullBlob: Blob; tags: string[] }>> {
+    if (!this.db) throw new Error("Database not initialized");
+    return new Promise((resolve, reject) => {
+      const tx = this.db!.transaction(["referenceLibrary"], "readonly");
+      const store = tx.objectStore("referenceLibrary");
+      const req = store.getAll();
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => resolve(req.result ?? []);
+    });
+  }
+
+  async deleteReference(id: string): Promise<void> {
+    if (!this.db) throw new Error("Database not initialized");
+    return new Promise((resolve, reject) => {
+      const tx = this.db!.transaction(["referenceLibrary"], "readwrite");
+      const store = tx.objectStore("referenceLibrary");
+      const req = store.delete(id);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => resolve();
     });
   }
 

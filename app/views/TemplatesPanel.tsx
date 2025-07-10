@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Star, Plus, Trash2, Pencil } from "lucide-react";
+import { Star, Plus, Trash, Pencil, Check, X } from "lucide-react";
 import { Template } from "@/types";
 
 export interface TemplatesPanelProps {
@@ -37,6 +37,14 @@ export default function TemplatesPanel({
   const [newCategory, setNewCategory] = useState("");
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
 
+  // category renaming
+  const [editingCat, setEditingCat] = useState<string | null>(null);
+  const [catInput, setCatInput] = useState("");
+
+  const categories = Array.from(
+    templates.reduce((set, t) => set.add(t.category), new Set<string>())
+  );
+
   const handleSave = () => {
     if (!newName.trim() || !newPrompt.trim()) return;
     const template: Template = {
@@ -64,6 +72,21 @@ export default function TemplatesPanel({
     deleteTemplate(id);
   };
 
+  // rename category and persist
+  const renameCategory = () => {
+    if (editingCat === null) return;
+    const newCat = catInput.trim();
+    if (!newCat || newCat === editingCat) {
+      setEditingCat(null);
+      return;
+    }
+    templates
+      .filter((t) => t.category === editingCat)
+      .forEach((t) => updateTemplate({ ...t, category: newCat }));
+    setEditingCat(null);
+    setCatInput("");
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -82,7 +105,7 @@ export default function TemplatesPanel({
           </div>
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 max-h-[60vh] overflow-y-auto">
         {showAddForm && (
           <div className="space-y-2 p-4 border rounded-md">
             <input
@@ -112,21 +135,59 @@ export default function TemplatesPanel({
 
         <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
           <SelectTrigger>
-            <SelectValue placeholder="Choose a template" />
+            {(() => {
+              const sel = templates.find((t) => t.id === selectedTemplate);
+              return <span>{sel ? sel.name : "Choose a template"}</span>;
+            })()}
           </SelectTrigger>
           <SelectContent>
-            {templates.map((template) => (
-              <SelectItem key={template.id} value={template.id}>
-                <div className="flex items-center justify-between w-full">
-                  <div className="flex flex-col text-left">
-                    <span className="font-medium">{template.name}</span>
-                    <span className="text-xs text-muted-foreground truncate max-w-[160px]">
-                      {template.prompt.slice(0, 40)}{template.prompt.length > 40 ? "…" : ""}
-                    </span>
-                  </div>
-                  <Badge variant="outline">{template.category}</Badge>
+            {categories.map((cat) => (
+              <details key={cat} className="border rounded-md p-2">
+                <summary className="cursor-pointer flex items-center justify-between">
+                  {editingCat === cat ? (
+                    <div className="flex gap-2 w-full">
+                      <input
+                        className="flex-1 border p-1 rounded-md text-sm"
+                        value={catInput}
+                        onChange={(e) => setCatInput(e.target.value)}
+                        autoFocus
+                      />
+                      <Button size="icon" variant="ghost" onClick={renameCategory}>
+                        <Check className="w-4 h-4" />
+                      </Button>
+                      <Button size="icon" variant="ghost" onClick={() => setEditingCat(null)}>
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="font-medium">{cat}</span>
+                      <Button size="icon" variant="ghost" onClick={() => { setEditingCat(cat); setCatInput(cat); }}>
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+                    </>
+                  )}
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {templates.filter((t) => t.category === cat).map((t) => (
+                    <div
+                      key={t.id}
+                      className={`p-2 border rounded-md flex justify-between items-center cursor-pointer ${selectedTemplate === t.id ? "bg-accent" : ""}`}
+                      onClick={() => setSelectedTemplate(t.id)}
+                    >
+                      <span className="text-sm">{t.name}</span>
+                      <div className="flex gap-1">
+                        <Button size="icon" variant="ghost" onClick={(e) => { e.stopPropagation(); setEditingTemplate(t); setNewName(t.name); setNewPrompt(t.prompt); setNewCategory(t.category); setShowAddForm(true); }}>
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" onClick={(e) => { e.stopPropagation(); handleDelete(t.id); }}>
+                          <Trash className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </SelectItem>
+              </details>
             ))}
           </SelectContent>
         </Select>
@@ -154,7 +215,7 @@ export default function TemplatesPanel({
               size="sm"
               onClick={() => handleDelete(selectedTemplate)}
             >
-              <Trash2 className="w-4 h-4" />
+              <Trash className="w-4 h-4" />
             </Button>
           </div>
         )}

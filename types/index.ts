@@ -19,6 +19,8 @@ export interface ImageData {
   status: "idle" | "processing" | "completed" | "failed";
   outputUrl?: string;
   videos?: string[];
+  lastFrame?: File | null;
+  lastFramePreview?: string | null;
   error?: string;
   editHistory?: EditHistoryItem[];
   mode: "seedance" | "kontext";
@@ -149,6 +151,8 @@ export interface Gen4Props {
   gen4Prompt: string;
   setGen4Prompt: (prompt: string) => void;
   generateGen4: () => void;
+  replaceReferenceWithGen: (outputUrl: string, slot: number) => void;
+  sendGenerationToWorkspace: (outputUrl: string) => void;
   activeTab: string;
   removeTagFromGen4Image: (id: string, tagIndex: number) => void;
 }
