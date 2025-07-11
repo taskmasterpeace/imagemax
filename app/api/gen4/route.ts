@@ -11,23 +11,23 @@ export async function POST(request: NextRequest) {
     const apiKey = process.env.REPLICATE_API_TOKEN;
     const {
       prompt,
-      aspectRatio,
+      aspect_ratio,
       resolution,
-      referenceImages,
-      referenceTags,
+      reference_tags,
+      reference_images,
     }: {
       prompt: string;
-      aspectRatio: string;
+      aspect_ratio: string;
       resolution: string;
-      referenceImages: string[];
-      referenceTags: string[];
+      reference_tags: string[];
+      reference_images: string[];
     } = await request.json();
 
     if (!prompt) {
       return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
     }
 
-    if (!referenceImages || referenceImages.length === 0) {
+    if (!reference_images || reference_images.length === 0) {
       return NextResponse.json(
         { error: "At least one reference image is required" },
         { status: 400 }
@@ -36,11 +36,11 @@ export async function POST(request: NextRequest) {
 
     const body = {
       input: {
-        reference_images: referenceImages,
-        reference_tags: referenceTags,
+        reference_images: reference_images,
+        reference_tags: reference_tags,
         prompt: prompt,
         resolution: resolution,
-        aspect_ratio: aspectRatio,
+        aspect_ratio: aspect_ratio,
       },
     };
     const generateResponse = await fetch(
@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
       success: true,
       imageUrl: Array.isArray(result.output) ? result.output[0] : result.output,
       predictionId: result.id,
-      referenceCount: referenceImages.length,
+      referenceCount: reference_images.length,
     });
   } catch (error) {
     console.error("Gen 4 generation error:", error);
