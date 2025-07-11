@@ -417,7 +417,7 @@ export default function VideoGeneratorApp() {
       const fileUrls = await Promise.all(
         selectedImages.map(async (img) => {
           if (img.file) {
-            return uploadFile(img.file);
+            return { id: img.id, url: await uploadFile(img.file) };
           }
 
           const dbImg = await dbManager.getImage(img.id);
@@ -440,32 +440,67 @@ export default function VideoGeneratorApp() {
           return "";
         })
       );
+      
+      // Create Promise.all for the generate-media API calls
+      const generationPromises = selectedImages.map(async (img, index) => {
+        const fileUrl = fileUrls[index];
+        
+        if (!fileUrl) {
+          return {
+            filename: img.id,
+            prompt: img.prompt || "",
+            status: "failed",
+            error: "Failed to get image URL",
+          };
+        }
+        
+        // Create payload for this specific image
+        const payload = {
+          fileUrl: typeof fileUrl === "string" ? fileUrl : fileUrl.url,
+          prompt: img.prompt || "",
+          seedanceModel: settings?.seedance?.model,
+          resolution: settings?.seedance?.resolution,
+          duration: settings?.seedance?.duration,
+          camera_fixed: settings?.seedance?.cameraFixed,
+          mode,
+          filename: img.id,
+        };
+        
+        try {
+          const response = await fetch("/api/generate-media", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
 
-      const payload = {
-        fileUrls,
-        prompts: selectedImages.map((img) => img.prompt),
-        seedanceModel: settings?.seedance?.model,
-        resolution: settings?.seedance?.resolution,
-        duration: settings?.seedance?.duration,
-        camera_fixed: settings?.seedance?.cameraFixed,
-        mode,
-      };
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
 
-      const response = await fetch("/api/generate-media", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+          const result = await response.json();
+          return result.generatedResponse;
+        } catch (error) {
+          console.error(`Error generating video for image ${img.id}:`, error);
+          return {
+            filename: img.id,
+            prompt: img.prompt || "",
+            status: "failed",
+            error: error instanceof Error ? error.message : "Unknown error occurred",
+          };
+        }
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
-      const generated = result?.generatedResponse || [];
+      
+      // Wait for all generation API calls to complete
+      const generated = await Promise.all(generationPromises);
 
       setGeneratedVideos(generated);
-      setJobStatus({ ...result, tasks: generated });
+      setJobStatus({ 
+        jobId: `batch-${Date.now()}`, // Adding the required jobId field
+        status: "completed", 
+        total: selectedImages.length,
+        completed: generated.filter(g => g.status === "completed").length,
+        tasks: generated 
+      });
 
       // Mark completed
       setImages((prev) =>
@@ -476,13 +511,17 @@ export default function VideoGeneratorApp() {
         )
       );
 
-      for (let i = 0; i < modeImages.length; i++) {
-        const image = modeImages[i];
+      // Update indexed DB with new videos
+      for (const image of modeImages) {
         const dbImage = await dbManager.getImage(image.id);
         if (!dbImage) continue;
 
-        const newVideoUrl = generated[i]?.outputUrl;
-        const fileUrl = generated[i]?.fileUrl || dbImage.fileUrl || "";
+        // Find the generated result for this image
+        const genResult = generated.find(g => g.filename === image.id);
+        if (!genResult) continue;
+        
+        const newVideoUrl = genResult?.outputUrl;
+        const fileUrl = genResult?.fileUrl || dbImage.fileUrl || "";
 
         const existingVideos = Array.isArray(dbImage.videos)
           ? [...dbImage.videos]
@@ -1030,15 +1069,25 @@ export default function VideoGeneratorApp() {
                                         : "Enter edit prompt..."
                                     }
                                     value={image.prompt}
-                                    onChange={(e) =>
+                                    onChange={(e) => {
+                                      const target = e.target;
+                                      const cursorPosition = target.selectionStart;
+                                      const cursorEnd = target.selectionEnd;
+                                      
                                       setImages((prev) =>
                                         prev.map((img) =>
                                           img.id === image.id
                                             ? { ...img, prompt: e.target.value }
                                             : img
                                         )
-                                      )
-                                    }
+                                      );
+                                      
+                                      // Use setTimeout to ensure this runs after React's state update and re-render
+                                      setTimeout(() => {
+                                        target.selectionStart = cursorPosition;
+                                        target.selectionEnd = cursorEnd;
+                                      }, 0);
+                                    }}
                                     rows={2}
                                     className="text-sm"
                                   />
