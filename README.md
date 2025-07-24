@@ -1,6 +1,6 @@
-# Seedance Video Generator
+# ImageMax
 
-A React + Next.js application for bulk image-to-video generation using Replicate's Seedance API.
+ImageMax is a React + Next.js application for bulk image-to-video generation using Replicate's Seedance API.
 
 ## Features
 

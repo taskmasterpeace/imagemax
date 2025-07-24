@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useCallback } from "react";
-
-import { useState, useEffect, useRef } from "react";
+import React from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
+import Gen4LibraryBar from "./components/Gen4LibraryBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,25 +19,32 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
-import { toast } from "@/hooks/use-toast";
+import { toast } from "@/components/ui/use-toast";
 import {
-  Play,
-  Trash2,
-  Settings,
-  ImageIcon,
-  Sparkles,
-  Check,
+  Search,
+  Upload,
   X,
+  Check,
   Plus,
-  Layers,
+  ChevronLeft,
+  ChevronRight,
+  Trash2,
+  ImageIcon,
+  Settings,
   Grid,
   List,
   SortAsc,
   SortDesc,
-  Search,
+  Play,
+  Download,
+  Copy,
+  Layers,
+  Sparkles,
+  Layout as LayoutIcon,
 } from "lucide-react";
 import { defaultSettings, defaultTemplates } from "@/static/data";
 import { dbManager } from "@/lib/indexeddb";
+import type { Generation } from "@/types";
 import { copyToClipboard, downloadFile, handleDragOver } from "@/lib/helpers";
 import { convertToBase64 } from "@/lib/utils";
 import {
@@ -54,6 +61,8 @@ import TemplatesPanel from "@/app/views/TemplatesPanel";
 import BulkActionsPanel from "@/app/views/BulkActionsPanel";
 import Gen4 from "@/app/views/tab/Gen4";
 import Setting from "./views/tab/Setting";
+import Gen4LibraryTab from "@/app/components/Gen4LibraryTab";
+import LayoutPlanner from "@/app/components/LayoutPlanner";
 
 export default function VideoGeneratorApp() {
   // State management
@@ -96,6 +105,37 @@ export default function VideoGeneratorApp() {
   });
   const [gen4Generations, setGen4Generations] = useState<Gen4Generation[]>([]);
 
+  // --- Tag library helper ---
+  const sendLibraryItemToRef = useCallback(
+    (blob: Blob, tag: string, slot: 0 | 1 | 2) => {
+      const id = Date.now().toString();
+      const preview = URL.createObjectURL(blob);
+      const file = new File([blob], `lib-${id}.png`, { type: "image/png" });
+
+      setGen4ReferenceImages((prev) => {
+        const updated = [...prev];
+        const newItem = {
+          id,
+          file,
+          preview,
+          tags: [tag],
+        } as Gen4ReferenceImage;
+
+        // Ensure array has exactly 3 slots
+        const arr = [undefined, undefined, undefined] as Array<
+          Gen4ReferenceImage | undefined
+        >;
+        // copy previous but not duplicates
+        for (let i = 0; i < updated.length && i < 3; i++) {
+          arr[i] = updated[i];
+        }
+        arr[slot] = newItem;
+        return arr.filter(Boolean) as Gen4ReferenceImage[];
+      });
+    },
+    []
+  );
+
   // ----- Template CRUD handlers -----
   const addTemplate = (template: Template) => {
     setTemplates((prev) => [...prev, template]);
@@ -116,15 +156,46 @@ export default function VideoGeneratorApp() {
   };
 
   // ----- Gen 4 helper handlers (stub implementations for now) -----
-  const replaceReferenceWithGen = (outputUrl: string, slot: number) => {
-    // TODO: implement proper replacement logic. For now, simply log.
-    console.log("replaceReferenceWithGen", { outputUrl, slot });
+  const [libraryRefresh, setLibraryRefresh] = useState<number>(0);
+
+  const replaceReferenceWithGen = async (src: string | Blob, slot: number, tags: string[] = []) => {
+    try {
+      let file: File;
+      if (typeof src === "string") {
+        const response = await fetch(src);
+        const blob = await response.blob();
+        file = new File([blob], `ref_${Date.now()}.png`, { type: blob.type });
+      } else {
+        file = new File([src], `ref_${Date.now()}.png`, { type: src.type });
+      }
+
+      const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      const preview = URL.createObjectURL(file);
+
+      setGen4ReferenceImages((prev) => {
+        const newArr = [...prev];
+        newArr[slot] = { id, file, preview, tags: tags } as any;
+        return newArr;
+      });
+
+      const tagText = tags.length > 0 ? ` with ${tags.length} tag(s)` : '';
+      toast({ title: `Reference ${slot + 1} set`, description: `Image set as reference${tagText}.` });
+    } catch (err) {
+      console.error("replaceReferenceWithGen error", err);
+      toast({
+        title: "Error",
+        description: "Failed to set reference image.",
+        variant: "destructive",
+      });
+    }
   };
 
-  const sendGenerationToWorkspace = (outputUrl: string) => {
-    // TODO: move generation result to main workspace. For now, log.
-    console.log("sendGenerationToWorkspace", { outputUrl });
+  const deleteReferenceFromLibrary = async (id: string) => {
+    await dbManager.deleteReference(id);
+    setLibraryRefresh((v) => v + 1);
   };
+
+  // sendGenerationToWorkspace is implemented below
 
   // Settings state
   const [settings, setSettings] = useState(defaultSettings);
@@ -275,6 +346,10 @@ export default function VideoGeneratorApp() {
     await dbManager.removeImage(id);
   };
 
+  const removeGeneration = (id: string) => {
+    setGen4Generations((prev) => prev.filter((gen) => gen.id !== id));
+  };
+
   const toggleImageSelection = (id: string) => {
     setImages((prev) =>
       prev.map((img) =>
@@ -350,9 +425,28 @@ export default function VideoGeneratorApp() {
   };
 
   const uploadFile = async (fileOrUrl: File | string) => {
-    // If fileOrUrl is already a URL string, just return it
+    // If fileOrUrl is already a URL string, ensure it contains a file extension
     if (typeof fileOrUrl === "string") {
-      return fileOrUrl;
+      const extensionRegex = /\.[a-zA-Z0-9]{3,4}(?:$|\?)/;
+      if (extensionRegex.test(fileOrUrl)) {
+        return fileOrUrl;
+      }
+      // Attempt to fetch metadata from the Replicate file endpoint to get a
+      // proper download_url (which includes extension)
+      try {
+        const metaRes = await fetch(fileOrUrl);
+        if (metaRes.ok) {
+          const meta = await metaRes.json();
+          if (meta.download_url && extensionRegex.test(meta.download_url)) {
+            return meta.download_url as string;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not resolve extension for", fileOrUrl, err);
+      }
+      // As a fallback, append a default .png extension so downstream code
+      // treats it as an image. This will still work for most image viewers.
+      return `${fileOrUrl}.png`;
     }
 
     // Otherwise, it's a File object that needs to be uploaded
@@ -370,10 +464,44 @@ export default function VideoGeneratorApp() {
         );
       }
       const result = await response.json();
-      if (!result.urls || !result.urls.get) {
-        throw new Error("Invalid response from upload API");
+      // Handle multiple possible response shapes from Replicate `/files` endpoint
+      // 1. Current (mid-2024+) → `download_url`
+      // 2. Docs/examples         → `url`
+      // 3. Legacy (old code)     → `urls.get`
+      let uploadedUrl: string | undefined =
+        result.download_url ??
+        result.url ??
+        result.urls?.get;
+
+      if (!uploadedUrl) {
+        throw new Error("Invalid response from upload API – no URL returned");
       }
-      return result.urls.get as string;
+
+      // Some Replicate file URLs (e.g. the `url` field) do not include a file
+      // extension which can break downstream consumers that expect one. If the
+      // chosen URL lacks an extension, try to repair it by preferring
+      // `download_url` (which always has the original filename). As a final
+      // fallback, fetch the metadata and look for a `download_url` field there.
+      const extensionRegex = /\.[a-zA-Z0-9]{3,4}(?:$|\?)/;
+      if (!extensionRegex.test(uploadedUrl)) {
+        if (result.download_url && extensionRegex.test(result.download_url)) {
+          uploadedUrl = result.download_url;
+        } else {
+          try {
+            const metaRes = await fetch(uploadedUrl);
+            if (metaRes.ok) {
+              const meta = await metaRes.json();
+              if (meta.download_url && extensionRegex.test(meta.download_url)) {
+                uploadedUrl = meta.download_url;
+              }
+            }
+          } catch (metaErr) {
+            console.warn("Could not resolve extended URL for", uploadedUrl, metaErr);
+          }
+        }
+      }
+
+      return uploadedUrl as string;
     } catch (error) {
       console.error("Upload error:", error);
       toast({
@@ -440,11 +568,11 @@ export default function VideoGeneratorApp() {
           return "";
         })
       );
-      
+
       // Create Promise.all for the generate-media API calls
       const generationPromises = selectedImages.map(async (img, index) => {
         const fileUrl = fileUrls[index];
-        
+
         if (!fileUrl) {
           return {
             filename: img.id,
@@ -453,10 +581,21 @@ export default function VideoGeneratorApp() {
             error: "Failed to get image URL",
           };
         }
-        
+
+        // If a last frame file exists, upload it and obtain its URL
+        let lastFrameUrl: string | undefined;
+        if (img.lastFrameFile) {
+          try {
+            lastFrameUrl = await uploadFile(img.lastFrameFile);
+          } catch (err) {
+            console.error("Failed to upload last frame:", err);
+          }
+        }
+
         // Create payload for this specific image
         const payload = {
           fileUrl: typeof fileUrl === "string" ? fileUrl : fileUrl.url,
+          lastFrameUrl, // may be undefined if none
           prompt: img.prompt || "",
           seedanceModel: settings?.seedance?.model,
           resolution: settings?.seedance?.resolution,
@@ -465,7 +604,7 @@ export default function VideoGeneratorApp() {
           mode,
           filename: img.id,
         };
-        
+
         try {
           const response = await fetch("/api/generate-media", {
             method: "POST",
@@ -489,7 +628,7 @@ export default function VideoGeneratorApp() {
           };
         }
       });
-      
+
       // Wait for all generation API calls to complete
       const generated = await Promise.all(generationPromises);
 
@@ -572,6 +711,45 @@ export default function VideoGeneratorApp() {
 
   const { onSubmit: startKontextGeneration, processing: kontextProcessing } =
     useLoading(() => startGeneration("kontext", images));
+
+  const sendGenerationToWorkspace = async (imageUrl: string) => {
+    try {
+      if (!imageUrl) return;
+
+      const response = await fetch(imageUrl);
+      const blob = await response.blob();
+      const file = new File([blob], `gen4_${Date.now()}.png`, { type: 'image/png' });
+      
+      const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      const base64Data = await convertToBase64(file);
+
+      const newImage: ImageData = {
+        id,
+        file,
+        fileUrl: imageUrl,
+        preview: base64Data,
+        prompt: '',
+        selected: false,
+        status: 'idle',
+        mode: mode,
+      };
+
+      setImages(prev => [...prev, newImage]);
+      await dbManager.saveImages([newImage]);
+
+      toast({
+        title: 'Added to Workspace',
+        description: 'Image has been added to your workspace.',
+      });
+    } catch (error) {
+      console.error('Error sending to workspace:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to add image to workspace.',
+        variant: 'destructive',
+      });
+    }
+  };
 
   const sendToGen4 = () => {
     const selectedImages = images.filter((img) => img.selected);
@@ -663,8 +841,6 @@ export default function VideoGeneratorApp() {
 
         const result = await response.json();
 
-        
-
         setGen4Generations((prev) =>
           prev.map((gen) =>
             gen.id === tempId
@@ -710,21 +886,19 @@ export default function VideoGeneratorApp() {
     );
   };
 
-  const removeTagFromGen4Image = (imageId: string, tagIndex: number) => {
+  const removeTagFromGen4Image = (imageId: string, tagToRemove: string) => {
     setGen4ReferenceImages((prev) =>
-      prev.map((img) =>
-        img.id === imageId
-          ? {
-              ...img,
-              tags: img.tags.filter((_, index) => index !== tagIndex),
-            }
-          : img
-      )
+      prev.map((img) => {
+        if (img.id === imageId) {
+          const newTags = img.tags.filter(tag => tag !== tagToRemove);
+          return { ...img, tags: newTags };
+        }
+        return img;
+      })
     );
   };
 
-  // Filter and sort images
-  const filteredImagesData = useCallback(
+  const filteredImagesData = useMemo(
     () =>
       images
         .filter((img) => {
@@ -777,24 +951,78 @@ export default function VideoGeneratorApp() {
     setFilteredImages(filteredImagesData);
   }, [filteredImagesData]);
 
+  const saveToLibrary = async (generation: Generation) => {
+    try {
+      if (!generation.outputUrl) return;
+      const response = await fetch(generation.outputUrl);
+      const fullBlob = await response.blob();
+      
+      // Create a thumbnail blob
+      const img = new Image();
+      img.src = URL.createObjectURL(fullBlob);
+      await new Promise((resolve) => (img.onload = resolve));
+      
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d')!;
+      const maxSize = 200;
+      const scale = Math.min(maxSize / img.width, maxSize / img.height);
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      
+      const thumbBlob = await new Promise<Blob>((resolve) =>
+        canvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.8)
+      );
+      
+      await dbManager.addReference(
+        generation.id,
+        thumbBlob,
+        fullBlob,
+        ['gen4']
+      );
+
+      toast({
+        title: 'Saved to Library',
+        description: 'Image has been saved to your Gen4 library.',
+      });
+    } catch (error) {
+      console.error('Error saving to library:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to save image to library.',
+        variant: 'destructive',
+      });
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
       <div className="container 2xl:max-w-[1825px] mx-auto p-6">
         <div className="mb-8">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
-            Seedance Video Generator
-          </h1>
-          <p className="text-slate-600 dark:text-slate-400 mt-2">
-            Transform your images into stunning videos with AI
-          </p>
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-16 h-16 bg-gradient-to-br from-cyan-400 via-blue-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg">
+              <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
+                <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[8px] border-b-blue-600 ml-1"></div>
+              </div>
+            </div>
+            <div>
+              <h1 className="text-4xl font-bold bg-gradient-to-r from-cyan-500 via-blue-600 to-purple-600 bg-clip-text text-transparent">
+                ImageMax
+              </h1>
+              <p className="text-slate-600 dark:text-slate-400 mt-1">
+                Transform your images into stunning videos with AI
+              </p>
+            </div>
+          </div>
         </div>
 
         <Tabs
+          defaultValue="workspace"
           value={activeTab}
           onValueChange={setActiveTab}
           className="space-y-6"
         >
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4 lg:w-[540px]">
             <TabsTrigger value="workspace" className="flex items-center gap-2">
               <Layers className="w-4 h-4" />
               Workspace
@@ -812,6 +1040,10 @@ export default function VideoGeneratorApp() {
                   {gen4ImageCount + gen4GenerationCount}
                 </Badge>
               )}
+            </TabsTrigger>
+            <TabsTrigger value="layoutPlanner" className="flex items-center gap-2">
+              <LayoutIcon className="w-4 h-4" />
+              Layout Planner
             </TabsTrigger>
             <TabsTrigger value="settings" className="flex items-center gap-2">
               <Settings className="w-4 h-4" />
@@ -992,11 +1224,22 @@ export default function VideoGeneratorApp() {
                               >
                                 <img
                                   src={
-                                    `data:image/png;base64,${image.preview}` ||
-                                    "/placeholder.svg"
+                                    image.preview ? `data:image/png;base64,${image.preview}` : "/placeholder.svg"
                                   }
                                   alt={image?.file?.name}
                                   className="w-full h-full object-contain bg-black/10"
+                                  onError={(e) => {
+                                    console.error('🖼️ Image failed to load:', {
+                                      imageId: image.id,
+                                      fileName: image?.file?.name,
+                                      previewLength: image.preview?.length || 0,
+                                      previewStart: image.preview?.substring(0, 50) || 'No preview data'
+                                    });
+                                    e.currentTarget.src = '/placeholder.svg';
+                                  }}
+                                  onLoad={() => {
+                                    console.log('✅ Image loaded successfully:', image?.file?.name);
+                                  }}
                                 />
                                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                   <div className="flex gap-2">
@@ -1025,7 +1268,7 @@ export default function VideoGeneratorApp() {
                                       variant="secondary"
                                       onClick={() =>
                                         openFullscreenImage(
-                                          image.preview || "/placeholder.svg",
+                                          image.preview ? `data:image/png;base64,${image.preview}` : "/placeholder.svg",
                                           "kontext"
                                         )
                                       }
@@ -1062,41 +1305,70 @@ export default function VideoGeneratorApp() {
                                   <p className="font-medium text-sm truncate mb-2">
                                     {image?.file?.name}
                                   </p>
-                                  <Textarea
-                                    placeholder={
-                                      mode === "seedance"
-                                        ? "Enter video prompt..."
-                                        : "Enter edit prompt..."
-                                    }
-                                    value={image.prompt}
-                                    onChange={(e) => {
-                                      const target = e.target;
-                                      const cursorPosition = target.selectionStart;
-                                      const cursorEnd = target.selectionEnd;
-                                      
-                                      setImages((prev) =>
-                                        prev.map((img) =>
-                                          img.id === image.id
-                                            ? { ...img, prompt: e.target.value }
-                                            : img
-                                        )
-                                      );
-                                      
-                                      // Use setTimeout to ensure this runs after React's state update and re-render
-                                      setTimeout(() => {
-                                        target.selectionStart = cursorPosition;
-                                        target.selectionEnd = cursorEnd;
-                                      }, 0);
-                                    }}
-                                    rows={2}
-                                    className="text-sm"
-                                  />
+                                  <div className="relative">
+                                    <textarea
+                                      placeholder={
+                                        mode === "seedance"
+                                          ? "Enter video prompt..."
+                                          : "Enter edit prompt..."
+                                      }
+                                      value={image.prompt}
+                                      ref={(el) => {
+                                        // Use a ref to attach native event listeners
+                                        if (el) {
+                                          // Clean event handling - no need to remove listeners as React will handle this
+                                          
+                                          // Add a native event listener
+                                          el.addEventListener('input', (e) => {
+                                            const target = e.target as HTMLTextAreaElement;
+                                            const newValue = target.value;
+                                            
+                                            // Use requestAnimationFrame to avoid React batching issues
+                                            requestAnimationFrame(() => {
+                                              setImages((prev) => {
+                                                return prev.map((img) => {
+                                                  if (img.id === image.id) {
+                                                    return { ...img, prompt: newValue };
+                                                  }
+                                                  return img;
+                                                });
+                                              });
+                                            });
+                                          });
+                                        }
+                                      }}
+                                      rows={2}
+                                      className="resize-none border rounded-md p-2 w-full text-sm pr-8"
+                                    />
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="absolute top-0 right-0"
+                                      onClick={async () => {
+                                        try {
+                                          const text = await navigator.clipboard.readText();
+                                          if (text) {
+                                            setImages((prev) =>
+                                              prev.map((img) =>
+                                                img.id === image.id ? { ...img, prompt: text } : img
+                                              )
+                                            );
+                                          }
+                                        } catch (err) {
+                                          console.error("Clipboard read failed", err);
+                                          toast({ title: "Clipboard read failed", variant: "destructive" });
+                                        }
+                                      }}
+                                    >
+                                      <Copy className="w-4 h-4" />
+                                    </Button>
+                                  </div>
 
                                   {/* Final frame uploader / preview */}
                                   {(!image.lastFramePreview) ? (
                                     <div className="mt-2 text-xs">
-                                      <label className="cursor-pointer text-purple-600 hover:underline">
-                                        Add final frame
+                                      <label className="cursor-pointer text-purple-600 hover:underline inline-flex items-center gap-1">
+                                        <ImageIcon className="w-4 h-4" />
                                         <input
                                           type="file"
                                           accept="image/*"
@@ -1148,9 +1420,17 @@ export default function VideoGeneratorApp() {
                                 {mode === "kontext" && image.prompt && (
                                   <Button
                                     size="sm"
-                                    onClick={() =>
-                                      startKontextGeneration("kontext")
-                                    }
+                                    onClick={() => {
+                                      // Make sure this image is selected first
+                                      setImages((prev) =>
+                                        prev.map((img) => ({
+                                          ...img,
+                                          selected: img.id === image.id
+                                        }))
+                                      );
+                                      // Then start the generation
+                                      setTimeout(() => startKontextGeneration(), 0);
+                                    }}
                                     disabled={kontextProcessing}
                                     className="mt-2 w-full"
                                   >
@@ -1312,6 +1592,7 @@ export default function VideoGeneratorApp() {
               downloadFile={downloadFile}
               copyToClipboard={copyToClipboard}
               removeImage={removeImage}
+              removeGeneration={removeGeneration}
               gen4FileInputRef={gen4FileInputRef}
               handleFileUpload={handleFileUpload}
               handleDrop={handleDrop}
@@ -1322,7 +1603,21 @@ export default function VideoGeneratorApp() {
               generateGen4={generateGen4}
               replaceReferenceWithGen={replaceReferenceWithGen}
               sendGenerationToWorkspace={sendGenerationToWorkspace}
+              saveToLibrary={saveToLibrary}
             />
+          </TabsContent>
+
+
+
+          {/* Layout Planner Tab */}
+          <TabsContent value="layoutPlanner" className="space-y-6" forceMount>
+            <div
+              className={`space-y-6 ${
+                activeTab === "layoutPlanner" ? "" : "hidden"
+              }`}
+            >
+              <LayoutPlanner />
+            </div>
           </TabsContent>
 
           {/* Settings Tab */}
@@ -1331,10 +1626,17 @@ export default function VideoGeneratorApp() {
               settings={settings}
               setSettings={setSettings}
               activeTab={activeTab}
-              selectedCount={images.filter((img) => img.selected).length}
+              selectedCount={selectedCount}
             />
           </TabsContent>
         </Tabs>
+        {activeTab === 'gen4' && (
+          <Gen4LibraryBar
+            onSetRef={replaceReferenceWithGen}
+            onDelete={deleteReferenceFromLibrary}
+            refreshTrigger={libraryRefresh}
+          />
+        )}
       </div>
       {/* Fullscreen Image Modal */}
       {(fullscreenImage || fullscreenVideo) && (

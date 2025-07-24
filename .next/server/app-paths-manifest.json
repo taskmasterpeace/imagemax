@@ -1,0 +1,6 @@
+{
+  "/api/gen4/route": "app/api/gen4/route.js",
+  "/api/generate-media/route": "app/api/generate-media/route.js",
+  "/page": "app/page.js",
+  "/api/upload-media/route": "app/api/upload-media/route.js"
+}

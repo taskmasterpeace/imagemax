@@ -20,6 +20,7 @@ export interface ImageData {
   outputUrl?: string;
   videos?: string[];
   lastFrame?: File | null;
+  lastFrameFile?: File | undefined;
   lastFramePreview?: string | null;
   error?: string;
   editHistory?: EditHistoryItem[];
@@ -97,6 +98,7 @@ export type Generation = {
   outputUrl?: string;
   error?: string;
   timestamp: number;
+  tags?: string[];
 };
 
 export interface Gen4Settings {
@@ -138,21 +140,23 @@ export interface Gen4Props {
   setGen4Settings: (
     settings: Gen4Settings | ((prev: Gen4Settings) => Gen4Settings)
   ) => void;
-  addTagToGen4Image: (id: string, tag: string) => void;
-  openFullscreenImage: (url: string, type: string) => void;
+  openFullscreenImage: (url: string, mode: string) => void;
   downloadFile: (url: string, filename: string) => void;
-  copyToClipboard: (text: string) => void;
-  removeImage: (id: string, isGen4: boolean) => void;
+  copyToClipboard: (url: string) => void;
+  removeImage: (id: string, isGen4?: boolean) => void;
+  removeGeneration: (id: string) => void;
   gen4FileInputRef: React.RefObject<HTMLInputElement>;
-  handleFileUpload: (files: FileList | null, isGen4: boolean) => void;
-  handleDrop: (e: React.DragEvent<HTMLDivElement>, isGen4: boolean) => void;
-  handleDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
-  gen4ReferenceImages: ImageReference[];
+  handleFileUpload: (files: FileList | null, isGen4?: boolean) => void;
+  handleDrop: (e: React.DragEvent, isGen4?: boolean) => void;
+  handleDragOver: (e: React.DragEvent) => void;
+  gen4ReferenceImages: Gen4ReferenceImage[];
   gen4Prompt: string;
   setGen4Prompt: (prompt: string) => void;
   generateGen4: () => void;
-  replaceReferenceWithGen: (outputUrl: string, slot: number) => void;
-  sendGenerationToWorkspace: (outputUrl: string) => void;
   activeTab: string;
-  removeTagFromGen4Image: (id: string, tagIndex: number) => void;
+  removeTagFromGen4Image: (imageId: string, tag: string) => void;
+  addTagToGen4Image: (imageId: string, tag: string) => void;
+  replaceReferenceWithGen: (url: string, index: number, tags?: string[]) => void;
+  sendGenerationToWorkspace: (url: string) => void;
+  saveToLibrary: (generation: Generation) => Promise<void>;
 }

@@ -12,6 +12,7 @@ export async function POST(request: NextRequest) {
       mode,
       seedanceModel,
       filename,
+      lastFrameUrl,
     }: {
       fileUrl: string;
       prompt: string;
@@ -21,6 +22,7 @@ export async function POST(request: NextRequest) {
       mode: "seedance" | "kontext";
       seedanceModel: string;
       filename: string;
+      lastFrameUrl?: string;
     } = await request.json();
 
     if (!fileUrl || !prompt) {
@@ -35,8 +37,13 @@ export async function POST(request: NextRequest) {
       mode === "seedance"
         ? {
             model: `bytedance/${seedanceModel}`,
-            settings: (imageUrl: string, promptText: string) => ({
+            settings: (
+              imageUrl: string,
+              promptText: string,
+              lastFrame?: string
+            ) => ({
               image: imageUrl,
+              last_frame_image: lastFrame || undefined,
               fps: 24,
               prompt: promptText,
               resolution,
@@ -64,7 +71,7 @@ export async function POST(request: NextRequest) {
             Prefer: "wait",
           },
           body: JSON.stringify({
-            input: settings(fileUrl, prompt),
+            input: mode === "seedance" ? settings(fileUrl, prompt, lastFrameUrl) : settings(fileUrl, prompt),
           }),
         }
       );

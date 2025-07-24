@@ -2,7 +2,8 @@
 
 import React, { DragEvent } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Upload } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Upload, Clipboard } from "lucide-react";
 
 export interface UploadAreaProps {
   handleFileUpload: (files: FileList | null) => void;
@@ -53,6 +54,33 @@ export default function UploadArea({
             <span className="font-bold text-purple-600">Paste (Ctrl+V)</span>, drop, or click to upload images
           </p>
           <p className="text-slate-500">You can paste screenshots or images copied to your clipboard, or drag and drop files here. Support for JPG, PNG, WebP formats.</p>
+          
+          <Button 
+            variant="secondary" 
+            className="mt-4 flex items-center gap-2"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigator.clipboard.read().then(items => {
+                for (const item of items) {
+                  for (const type of item.types) {
+                    if (type.startsWith('image/')) {
+                      item.getType(type).then(blob => {
+                        const files = new DataTransfer();
+                        files.items.add(new File([blob], `pasted-image-${Date.now()}.${type.split('/')[1]}`, { type }));
+                        handleFileUpload(files.files);
+                      });
+                    }
+                  }
+                }
+              }).catch(err => {
+                console.error("Error accessing clipboard:", err);
+                alert("Unable to access clipboard. Please check permissions or try using Ctrl+V instead.");
+              });
+            }}
+          >
+            <Clipboard className="w-4 h-4" />
+            Paste from Clipboard
+          </Button>
         </div>
         <input
           ref={fileInputRef}
